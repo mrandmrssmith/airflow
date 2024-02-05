@@ -19,7 +19,6 @@ from __future__ import annotations
 import urllib
 
 import pytest
-from parameterized import parameterized
 
 from airflow.api_connexion.exceptions import EXCEPTIONS_LINK_MAP
 from airflow.models.dagrun import DagRun
@@ -32,6 +31,8 @@ from tests.test_utils.api_connexion_utils import assert_401, create_user, delete
 from tests.test_utils.asserts import assert_queries_count
 from tests.test_utils.config import conf_vars
 from tests.test_utils.db import clear_db_datasets, clear_db_runs
+
+pytestmark = pytest.mark.db_test
 
 
 @pytest.fixture(scope="module")
@@ -54,7 +55,6 @@ def configured_app(minimal_app_for_api):
 
 
 class TestDatasetEndpoint:
-
     default_time = "2020-06-11T18:00:00+00:00"
 
     @pytest.fixture(autouse=True)
@@ -206,7 +206,8 @@ class TestGetDatasets(TestDatasetEndpoint):
 
         assert_401(response)
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "url, expected_datasets",
         [
             ("api/v1/datasets?uri_pattern=s3", {"s3://folder/key"}),
             ("api/v1/datasets?uri_pattern=bucket", {"gcp://bucket/key", "wasb://some_dataset_bucket_/key"}),
@@ -223,7 +224,7 @@ class TestGetDatasets(TestDatasetEndpoint):
                     "wasb://some_dataset_bucket_/key",
                 },
             ),
-        ]
+        ],
     )
     @provide_session
     def test_filter_datasets_by_uri_pattern_works(self, url, expected_datasets, session):
@@ -240,7 +241,8 @@ class TestGetDatasets(TestDatasetEndpoint):
 
 
 class TestGetDatasetsEndpointPagination(TestDatasetEndpoint):
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "url, expected_dataset_uris",
         [
             # Limit test data
             ("/api/v1/datasets?limit=1", ["s3://bucket/key/1"]),
@@ -250,7 +252,7 @@ class TestGetDatasetsEndpointPagination(TestDatasetEndpoint):
             ("/api/v1/datasets?offset=3", [f"s3://bucket/key/{i}" for i in range(4, 104)]),
             # Limit and offset test data
             ("/api/v1/datasets?offset=3&limit=3", [f"s3://bucket/key/{i}" for i in [4, 5, 6]]),
-        ]
+        ],
     )
     @provide_session
     def test_limit_and_offset(self, url, expected_dataset_uris, session):
@@ -505,7 +507,8 @@ class TestGetDatasetEvents(TestDatasetEndpoint):
 
 
 class TestGetDatasetEventsEndpointPagination(TestDatasetEndpoint):
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "url, expected_event_runids",
         [
             # Limit test data
             ("/api/v1/datasets/events?limit=1&order_by=source_run_id", ["run1"]),
@@ -527,7 +530,7 @@ class TestGetDatasetEventsEndpointPagination(TestDatasetEndpoint):
                 "/api/v1/datasets/events?offset=3&limit=3&order_by=source_run_id",
                 [f"run{i}" for i in [4, 5, 6]],
             ),
-        ]
+        ],
     )
     @provide_session
     def test_limit_and_offset(self, url, expected_event_runids, session):

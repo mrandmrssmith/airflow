@@ -23,7 +23,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
-from airflow import models
+from airflow.models.dag import DAG
 from airflow.providers.google.cloud.operators.bigquery import (
     BigQueryCreateEmptyDatasetOperator,
     BigQueryCreateEmptyTableOperator,
@@ -41,7 +41,7 @@ TARGET = "target"
 LOCATION = "US"
 
 
-with models.DAG(
+with DAG(
     DAG_ID,
     schedule="@once",
     start_date=datetime(2021, 1, 1),
@@ -74,11 +74,13 @@ with models.DAG(
         ],
     )
 
+    # [START howto_operator_bigquery_to_bigquery]
     copy_selected_data = BigQueryToBigQueryOperator(
         task_id="copy_selected_data",
         source_project_dataset_tables=f"{DATASET_NAME}.{ORIGIN}",
         destination_project_dataset_table=f"{DATASET_NAME}.{TARGET}",
     )
+    # [END howto_operator_bigquery_to_bigquery]
 
     delete_dataset = BigQueryDeleteDatasetOperator(
         task_id="delete_dataset",

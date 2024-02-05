@@ -43,6 +43,7 @@ def get_theme() -> Theme:
                     "info": "bold",
                     "warning": "italic",
                     "error": "italic underline",
+                    "special": "bold italic underline",
                 }
             )
     except ImportError:
@@ -56,6 +57,7 @@ def get_theme() -> Theme:
             "info": "bright_blue",
             "warning": "bright_yellow",
             "error": "red",
+            "special": "magenta",
         }
     )
 
@@ -65,6 +67,7 @@ class MessageType(Enum):
     INFO = "info"
     WARNING = "warning"
     ERROR = "error"
+    SPECIAL = "special"
 
 
 def message_type_from_return_code(return_code: int) -> MessageType:
@@ -80,6 +83,10 @@ class Output(NamedTuple):
     @property
     def file(self) -> TextIO:
         return open(self.file_name, "a+t")
+
+    @property
+    def escaped_title(self) -> str:
+        return self.title.replace("[", "\\[")
 
 
 @lru_cache(maxsize=None)
@@ -105,3 +112,7 @@ def get_stderr_console(output: Output | None = None) -> Console:
         theme=get_theme(),
         record=True if recording_file else False,
     )
+
+
+def console_print(*message) -> None:
+    return get_console().print(*message)

@@ -17,30 +17,44 @@
 # under the License.
 from __future__ import annotations
 
+import logging
 import os
 import pathlib
+import shutil
+from functools import cached_property
+from typing import TYPE_CHECKING
 
-from airflow.compat.functools import cached_property
 from airflow.configuration import conf
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.utils.log.file_task_handler import FileTaskHandler
 from airflow.utils.log.logging_mixin import LoggingMixin
 
+if TYPE_CHECKING:
+    from airflow.models.taskinstance import TaskInstance
+
 
 class S3TaskHandler(FileTaskHandler, LoggingMixin):
     """
-    S3TaskHandler is a python log handler that handles and reads
-    task instance logs. It extends airflow FileTaskHandler and
-    uploads to and reads from S3 remote storage.
+    S3TaskHandler is a python log handler that handles and reads task instance logs.
+
+    It extends airflow FileTaskHandler and uploads to and reads from S3 remote storage.
     """
 
-    def __init__(self, base_log_folder: str, s3_log_folder: str, filename_template: str | None = None):
+    trigger_should_wrap = True
+
+    def __init__(
+        self, base_log_folder: str, s3_log_folder: str, filename_template: str | None = None, **kwargs
+    ):
         super().__init__(base_log_folder, filename_template)
+        self.handler: logging.FileHandler | None = None
         self.remote_base = s3_log_folder
         self.log_relative_path = ""
         self._hook = None
         self.closed = False
         self.upload_on_close = True
+        self.delete_local_copy = kwargs.get(
+            "delete_local_copy", conf.getboolean("logging", "delete_local_logs")
+        )
 
     @cached_property
     def hook(self):
@@ -49,13 +63,22 @@ class S3TaskHandler(FileTaskHandler, LoggingMixin):
             aws_conn_id=conf.get("logging", "REMOTE_LOG_CONN_ID"), transfer_config_args={"use_threads": False}
         )
 
-    def set_context(self, ti):
-        super().set_context(ti)
+    def set_context(self, ti: TaskInstance, *, identifier: str | None = None) -> None:
+        # todo: remove-at-min-airflow-version-2.8
+        #   after Airflow 2.8 can always pass `identifier`
+        if getattr(super(), "supports_task_context_logging", False):
+            super().set_context(ti, identifier=identifier)
+        else:
+            super().set_context(ti)
         # Local location and remote location is needed to open and
         # upload local log file to S3 remote storage.
-        self.log_relative_path = self._render_filename(ti, ti.try_number)
-        self.upload_on_close = not ti.raw
+        if TYPE_CHECKING:
+            assert self.handler is not None
 
+        full_path = self.handler.baseFilename
+        self.log_relative_path = pathlib.Path(full_path).relative_to(self.local_base).as_posix()
+        is_trigger_log_context = getattr(ti, "is_trigger_log_context", False)
+        self.upload_on_close = is_trigger_log_context or not getattr(ti, "raw", None)
         # Clear the file first so that duplicate data is not uploaded
         # when re-using the same path (e.g. with rescheduled sensors)
         if self.upload_on_close:
@@ -81,51 +104,36 @@ class S3TaskHandler(FileTaskHandler, LoggingMixin):
         if os.path.exists(local_loc):
             # read log and remove old logs to get just the latest additions
             log = pathlib.Path(local_loc).read_text()
-            self.s3_write(log, remote_loc)
+            write_to_s3 = self.s3_write(log, remote_loc)
+            if write_to_s3 and self.delete_local_copy:
+                shutil.rmtree(os.path.dirname(local_loc))
 
         # Mark closed so we don't double write if close is called twice
         self.closed = True
 
-    def _read(self, ti, try_number, metadata=None):
-        """
-        Read logs of given task instance and try_number from S3 remote storage.
-        If failed, read the log from task instance host machine.
-
-        :param ti: task instance object
-        :param try_number: task instance try_number to read logs from
-        :param metadata: log metadata,
-                         can be used for steaming log reading and auto-tailing.
-        """
+    def _read_remote_logs(self, ti, try_number, metadata=None) -> tuple[list[str], list[str]]:
         # Explicitly getting log relative path is necessary as the given
         # task instance might be different than task instance passed in
         # in set_context method.
-        log_relative_path = self._render_filename(ti, try_number)
-        remote_loc = os.path.join(self.remote_base, log_relative_path)
+        worker_log_rel_path = self._render_filename(ti, try_number)
 
-        log_exists = False
-        log = ""
-
-        try:
-            log_exists = self.s3_log_exists(remote_loc)
-        except Exception as error:
-            self.log.exception("Failed to verify remote log exists %s.", remote_loc)
-            log = f"*** Failed to verify remote log exists {remote_loc}.\n{error}\n"
-
-        if log_exists:
-            # If S3 remote file exists, we do not fetch logs from task instance
-            # local machine even if there are errors reading remote logs, as
-            # returned remote_log will contain error messages.
-            remote_log = self.s3_read(remote_loc, return_error=True)
-            log = f"*** Reading remote log from {remote_loc}.\n{remote_log}\n"
-            return log, {"end_of_log": True}
+        logs = []
+        messages = []
+        bucket, prefix = self.hook.parse_s3_url(s3url=os.path.join(self.remote_base, worker_log_rel_path))
+        keys = self.hook.list_keys(bucket_name=bucket, prefix=prefix)
+        if keys:
+            keys = sorted(f"s3://{bucket}/{key}" for key in keys)
+            messages.append("Found logs in s3:")
+            messages.extend(f"  * {key}" for key in keys)
+            for key in keys:
+                logs.append(self.s3_read(key, return_error=True))
         else:
-            log += "*** Falling back to local log\n"
-            local_log, metadata = super()._read(ti, try_number, metadata)
-            return log + local_log, metadata
+            messages.append(f"No logs found on s3 for ti={ti}")
+        return messages, logs
 
     def s3_log_exists(self, remote_log_location: str) -> bool:
         """
-        Check if remote_log_location exists in remote storage
+        Check if remote_log_location exists in remote storage.
 
         :param remote_log_location: log's location in remote storage
         :return: True if location exists else False
@@ -134,8 +142,7 @@ class S3TaskHandler(FileTaskHandler, LoggingMixin):
 
     def s3_read(self, remote_log_location: str, return_error: bool = False) -> str:
         """
-        Returns the log found at the remote_log_location. Returns '' if no
-        logs are found or there is an error.
+        Return the log found at the remote_log_location or '' if no logs are found or there is an error.
 
         :param remote_log_location: the log's location in remote storage
         :param return_error: if True, returns a string error message if an
@@ -152,27 +159,28 @@ class S3TaskHandler(FileTaskHandler, LoggingMixin):
                 return msg
         return ""
 
-    def s3_write(self, log: str, remote_log_location: str, append: bool = True, max_retry: int = 1):
+    def s3_write(self, log: str, remote_log_location: str, append: bool = True, max_retry: int = 1) -> bool:
         """
-        Writes the log to the remote_log_location. Fails silently if no hook
-        was created.
+        Write the log to the remote_log_location; return `True` or fails silently and return `False`.
 
         :param log: the log to write to the remote_log_location
         :param remote_log_location: the log's location in remote storage
         :param append: if False, any existing log file is overwritten. If True,
             the new log is appended to any existing logs.
         :param max_retry: Maximum number of times to retry on upload failure
+        :return: whether the log is successfully written to remote location or not.
         """
         try:
             if append and self.s3_log_exists(remote_log_location):
                 old_log = self.s3_read(remote_log_location)
-                log = "\n".join([old_log, log]) if old_log else log
+                log = f"{old_log}\n{log}" if old_log else log
         except Exception:
             self.log.exception("Could not verify previous log to append")
+            return False
 
         # Default to a single retry attempt because s3 upload failures are
         # rare but occasionally occur.  Multiple retry attempts are unlikely
-        # to help as they usually indicate non-empheral errors.
+        # to help as they usually indicate non-ephemeral errors.
         for try_num in range(1 + max_retry):
             try:
                 self.hook.load_string(
@@ -187,3 +195,5 @@ class S3TaskHandler(FileTaskHandler, LoggingMixin):
                     self.log.warning("Failed attempt to write logs to %s, will retry", remote_log_location)
                 else:
                     self.log.exception("Could not write logs to %s", remote_log_location)
+                    return False
+        return True

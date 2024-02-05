@@ -23,6 +23,7 @@ import os
 import platform
 import subprocess
 import sys
+from enum import Enum
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -34,6 +35,7 @@ from airflow.providers_manager import ProvidersManager
 from airflow.typing_compat import Protocol
 from airflow.utils.cli import suppress_logs_and_warning
 from airflow.utils.platform import getuser
+from airflow.utils.providers_configuration_loader import providers_configuration_loaded
 from airflow.version import version as airflow_version
 
 log = logging.getLogger(__name__)
@@ -124,16 +126,17 @@ class PiiAnonymizer(Anonymizer):
         return urlunsplit((url_parts.scheme, netloc, url_parts.path, url_parts.query, url_parts.fragment))
 
 
-class OperatingSystem:
+class OperatingSystem(Enum):
     """Operating system."""
 
     WINDOWS = "Windows"
     LINUX = "Linux"
     MACOSX = "Mac OS"
     CYGWIN = "Cygwin"
+    UNKNOWN = "Unknown"
 
     @staticmethod
-    def get_current() -> str | None:
+    def get_current() -> OperatingSystem:
         """Get current operating system."""
         if os.name == "nt":
             return OperatingSystem.WINDOWS
@@ -143,24 +146,26 @@ class OperatingSystem:
             return OperatingSystem.MACOSX
         elif "cygwin" in sys.platform:
             return OperatingSystem.CYGWIN
-        return None
+        return OperatingSystem.UNKNOWN
 
 
-class Architecture:
+class Architecture(Enum):
     """Compute architecture."""
 
     X86_64 = "x86_64"
     X86 = "x86"
     PPC = "ppc"
     ARM = "arm"
+    UNKNOWN = "unknown"
 
     @staticmethod
-    def get_current():
+    def get_current() -> Architecture:
         """Get architecture."""
-        return _MACHINE_TO_ARCHITECTURE.get(platform.machine().lower())
+        current_architecture = _MACHINE_TO_ARCHITECTURE.get(platform.machine().lower())
+        return current_architecture or Architecture.UNKNOWN
 
 
-_MACHINE_TO_ARCHITECTURE = {
+_MACHINE_TO_ARCHITECTURE: dict[str, Architecture] = {
     "amd64": Architecture.X86_64,
     "x86_64": Architecture.X86_64,
     "i686-64": Architecture.X86_64,
@@ -176,6 +181,7 @@ _MACHINE_TO_ARCHITECTURE = {
     "arm64": Architecture.ARM,
     "armv7": Architecture.ARM,
     "armv7l": Architecture.ARM,
+    "aarch64": Architecture.ARM,
 }
 
 
@@ -203,7 +209,7 @@ class AirflowInfo:
 
     @staticmethod
     def _task_logging_handler():
-        """Returns task logging handler."""
+        """Return task logging handler."""
 
         def get_fullname(o):
             module = o.__class__.__module__
@@ -258,8 +264,8 @@ class AirflowInfo:
         python_version = sys.version.replace("\n", " ")
 
         return [
-            ("OS", operating_system or "NOT AVAILABLE"),
-            ("architecture", arch or "NOT AVAILABLE"),
+            ("OS", operating_system.value),
+            ("architecture", arch.value),
             ("uname", str(uname)),
             ("locale", str(_locale)),
             ("python_version", python_version),
@@ -308,7 +314,7 @@ class AirflowInfo:
         return [(p.data["package-name"], p.version) for p in ProvidersManager().providers.values()]
 
     def show(self, output: str, console: AirflowConsole | None = None) -> None:
-        """Shows information about Airflow instance."""
+        """Show information about Airflow instance."""
         all_info = {
             "Apache Airflow": self._airflow_info,
             "System info": self._system_info,
@@ -330,7 +336,7 @@ class AirflowInfo:
             )
 
     def render_text(self, output: str) -> str:
-        """Exports the info to string."""
+        """Export the info to string."""
         console = AirflowConsole(record=True)
         with console.capture():
             self.show(output=output, console=console)
@@ -373,6 +379,7 @@ def _send_report_to_fileio(info):
 
 
 @suppress_logs_and_warning
+@providers_configuration_loaded
 def show_info(args):
     """Show information related to Airflow, system and other."""
     # Enforce anonymization, when file_io upload is tuned on.

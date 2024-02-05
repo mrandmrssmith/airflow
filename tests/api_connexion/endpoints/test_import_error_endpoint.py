@@ -19,7 +19,6 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from parameterized import parameterized
 
 from airflow.api_connexion.exceptions import EXCEPTIONS_LINK_MAP
 from airflow.models.errors import ImportError
@@ -29,6 +28,8 @@ from airflow.utils.session import provide_session
 from tests.test_utils.api_connexion_utils import assert_401, create_user, delete_user
 from tests.test_utils.config import conf_vars
 from tests.test_utils.db import clear_db_import_errors
+
+pytestmark = pytest.mark.db_test
 
 
 @pytest.fixture(scope="module")
@@ -232,7 +233,8 @@ class TestGetImportErrorsEndpoint(TestBaseImportError):
 
 
 class TestGetImportErrorsEndpointPagination(TestBaseImportError):
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "url, expected_import_error_ids",
         [
             # Limit test data
             ("/api/v1/importErrors?limit=1", ["/tmp/file_1.py"]),
@@ -242,7 +244,7 @@ class TestGetImportErrorsEndpointPagination(TestBaseImportError):
             ("/api/v1/importErrors?offset=3", [f"/tmp/file_{i}.py" for i in range(4, 104)]),
             # Limit and offset test data
             ("/api/v1/importErrors?offset=3&limit=3", [f"/tmp/file_{i}.py" for i in [4, 5, 6]]),
-        ]
+        ],
     )
     @provide_session
     def test_limit_and_offset(self, url, expected_import_error_ids, session):

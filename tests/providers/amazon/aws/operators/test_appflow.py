@@ -23,6 +23,7 @@ from unittest.mock import ANY
 import pytest
 
 from airflow.providers.amazon.aws.operators.appflow import (
+    AppflowBaseOperator,
     AppflowRecordsShortCircuitOperator,
     AppflowRunAfterOperator,
     AppflowRunBeforeOperator,
@@ -41,9 +42,17 @@ EXECUTION_ID = "ex_id"
 CONNECTION_TYPE = "Salesforce"
 SOURCE = "salesforce"
 
-DUMP_COMMON_ARGS = {"aws_conn_id": CONN_ID, "task_id": TASK_ID, "source": SOURCE, "flow_name": FLOW_NAME}
+DUMP_COMMON_ARGS = {
+    "aws_conn_id": CONN_ID,
+    "task_id": TASK_ID,
+    "source": SOURCE,
+    "flow_name": FLOW_NAME,
+    "poll_interval": 0,
+}
+AppflowBaseOperator.UPDATE_PROPAGATION_TIME = 0  # avoid wait
 
 
+@pytest.mark.db_test
 @pytest.fixture
 def ctx(create_task_instance):
     ti = create_task_instance(
@@ -71,14 +80,27 @@ def appflow_conn():
         mock_conn.update_flow.return_value = {}
         mock_conn.start_flow.return_value = {"executionId": EXECUTION_ID}
         mock_conn.describe_flow_execution_records.return_value = {
-            "flowExecutions": [{"executionId": EXECUTION_ID, "executionResult": {"recordsProcessed": 1}}]
+            "flowExecutions": [
+                {
+                    "executionId": EXECUTION_ID,
+                    "executionResult": {"recordsProcessed": 1},
+                    "executionStatus": "Successful",
+                }
+            ]
         }
         yield mock_conn
 
 
+@pytest.fixture
+def waiter_mock():
+    with mock.patch("airflow.providers.amazon.aws.waiters.base_waiter.BaseBotoWaiter.waiter") as waiter:
+        yield waiter
+
+
 def run_assertions_base(appflow_conn, tasks):
     appflow_conn.describe_flow.assert_called_with(flowName=FLOW_NAME)
-    assert appflow_conn.describe_flow.call_count == 3
+    assert appflow_conn.describe_flow.call_count == 2
+    appflow_conn.describe_flow_execution_records.assert_called_once()
     appflow_conn.update_flow.assert_called_once_with(
         flowName=FLOW_NAME,
         tasks=tasks,
@@ -90,22 +112,26 @@ def run_assertions_base(appflow_conn, tasks):
     appflow_conn.start_flow.assert_called_once_with(flowName=FLOW_NAME)
 
 
-def test_run(appflow_conn, ctx):
+@pytest.mark.db_test
+def test_run(appflow_conn, ctx, waiter_mock):
     operator = AppflowRunOperator(**DUMP_COMMON_ARGS)
     operator.execute(ctx)  # type: ignore
-    appflow_conn.describe_flow.assert_called_with(flowName=FLOW_NAME)
-    assert appflow_conn.describe_flow.call_count == 2
     appflow_conn.start_flow.assert_called_once_with(flowName=FLOW_NAME)
+    appflow_conn.describe_flow_execution_records.assert_called_once()
 
 
-def test_run_full(appflow_conn, ctx):
+@pytest.mark.db_test
+def test_run_full(appflow_conn, ctx, waiter_mock):
     operator = AppflowRunFullOperator(**DUMP_COMMON_ARGS)
     operator.execute(ctx)  # type: ignore
     run_assertions_base(appflow_conn, [])
 
 
-def test_run_after(appflow_conn, ctx):
-    operator = AppflowRunAfterOperator(source_field="col0", filter_date="2022-05-26", **DUMP_COMMON_ARGS)
+@pytest.mark.db_test
+def test_run_after(appflow_conn, ctx, waiter_mock):
+    operator = AppflowRunAfterOperator(
+        source_field="col0", filter_date="2022-05-26T00:00+00:00", **DUMP_COMMON_ARGS
+    )
     operator.execute(ctx)  # type: ignore
     run_assertions_base(
         appflow_conn,
@@ -120,8 +146,11 @@ def test_run_after(appflow_conn, ctx):
     )
 
 
-def test_run_before(appflow_conn, ctx):
-    operator = AppflowRunBeforeOperator(source_field="col0", filter_date="2022-05-26", **DUMP_COMMON_ARGS)
+@pytest.mark.db_test
+def test_run_before(appflow_conn, ctx, waiter_mock):
+    operator = AppflowRunBeforeOperator(
+        source_field="col0", filter_date="2022-05-26T00:00+00:00", **DUMP_COMMON_ARGS
+    )
     operator.execute(ctx)  # type: ignore
     run_assertions_base(
         appflow_conn,
@@ -136,8 +165,11 @@ def test_run_before(appflow_conn, ctx):
     )
 
 
-def test_run_daily(appflow_conn, ctx):
-    operator = AppflowRunDailyOperator(source_field="col0", filter_date="2022-05-26", **DUMP_COMMON_ARGS)
+@pytest.mark.db_test
+def test_run_daily(appflow_conn, ctx, waiter_mock):
+    operator = AppflowRunDailyOperator(
+        source_field="col0", filter_date="2022-05-26T00:00+00:00", **DUMP_COMMON_ARGS
+    )
     operator.execute(ctx)  # type: ignore
     run_assertions_base(
         appflow_conn,
@@ -156,6 +188,7 @@ def test_run_daily(appflow_conn, ctx):
     )
 
 
+@pytest.mark.db_test
 def test_short_circuit(appflow_conn, ctx):
     with mock.patch("airflow.models.TaskInstance.xcom_pull") as mock_xcom_pull:
         with mock.patch("airflow.models.TaskInstance.xcom_push") as mock_xcom_push:
@@ -170,3 +203,57 @@ def test_short_circuit(appflow_conn, ctx):
                 flowName=FLOW_NAME, maxResults=100
             )
             mock_xcom_push.assert_called_with("records_processed", 1)
+
+
+@pytest.mark.parametrize(
+    "op_class, op_base_args",
+    [
+        pytest.param(
+            AppflowRunAfterOperator,
+            dict(**DUMP_COMMON_ARGS, source_field="col0", filter_date="2022-05-26T00:00+00:00"),
+            id="run-after-op",
+        ),
+        pytest.param(
+            AppflowRunBeforeOperator,
+            dict(**DUMP_COMMON_ARGS, source_field="col1", filter_date="2077-10-23T00:03+00:00"),
+            id="run-before-op",
+        ),
+        pytest.param(
+            AppflowRunDailyOperator,
+            dict(**DUMP_COMMON_ARGS, source_field="col2", filter_date="2023-10-20T12:22+00:00"),
+            id="run-daily-op",
+        ),
+        pytest.param(AppflowRunFullOperator, DUMP_COMMON_ARGS, id="run-full-op"),
+        pytest.param(AppflowRunOperator, DUMP_COMMON_ARGS, id="run-op"),
+        pytest.param(
+            AppflowRecordsShortCircuitOperator,
+            dict(task_id=SHORT_CIRCUIT_TASK_ID, flow_name=FLOW_NAME, appflow_run_task_id=TASK_ID),
+            id="records-short-circuit",
+        ),
+    ],
+)
+def test_base_aws_op_attributes(op_class, op_base_args):
+    op = op_class(**op_base_args)
+    hook = op.hook
+    assert hook is op.hook
+    assert hook.aws_conn_id == CONN_ID
+    assert hook._region_name is None
+    assert hook._verify is None
+    assert hook._config is None
+
+    op = op_class(**op_base_args, region_name="eu-west-1", verify=False, botocore_config={"read_timeout": 42})
+    hook = op.hook
+    assert hook is op.hook
+    assert hook.aws_conn_id == CONN_ID
+    assert hook._region_name == "eu-west-1"
+    assert hook._verify is False
+    assert hook._config.read_timeout == 42
+
+    # Compatibility check: previously Appflow Operators use `region` instead of `region_name`
+    warning_message = "`region` is deprecated and will be removed in the future"
+    with pytest.warns(DeprecationWarning, match=warning_message):
+        op = op_class(**op_base_args, region="us-west-1")
+    assert op.region_name == "us-west-1"
+
+    with pytest.warns(DeprecationWarning, match=warning_message):
+        assert op.region == "us-west-1"

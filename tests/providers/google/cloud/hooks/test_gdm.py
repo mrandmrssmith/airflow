@@ -17,7 +17,6 @@
 # under the License.
 from __future__ import annotations
 
-import unittest
 from unittest import mock
 
 import pytest
@@ -29,7 +28,6 @@ from airflow.providers.google.cloud.hooks.gdm import GoogleDeploymentManagerHook
 def mock_init(
     self,
     gcp_conn_id,
-    delegate_to=None,
     impersonation_chain=None,
 ):
     pass
@@ -39,8 +37,12 @@ TEST_PROJECT = "my-project"
 TEST_DEPLOYMENT = "my-deployment"
 
 
-class TestDeploymentManagerHook(unittest.TestCase):
-    def setUp(self):
+class TestDeploymentManagerHook:
+    def test_delegate_to_runtime_error(self):
+        with pytest.raises(RuntimeError):
+            GoogleDeploymentManagerHook(gcp_conn_id="GCP_CONN_ID", delegate_to="delegate_to")
+
+    def setup_method(self):
         with mock.patch(
             "airflow.providers.google.common.hooks.base_google.GoogleBaseHook.__init__",
             new=mock_init,
@@ -49,7 +51,6 @@ class TestDeploymentManagerHook(unittest.TestCase):
 
     @mock.patch("airflow.providers.google.cloud.hooks.gdm.GoogleDeploymentManagerHook.get_conn")
     def test_list_deployments(self, mock_get_conn):
-
         response1 = {"deployments": [{"id": "deployment1", "name": "test-deploy1"}], "pageToken": None}
         response2 = {"deployments": [{"id": "deployment2", "name": "test-deploy2"}], "pageToken": None}
 
@@ -91,7 +92,6 @@ class TestDeploymentManagerHook(unittest.TestCase):
 
     @mock.patch("airflow.providers.google.cloud.hooks.gdm.GoogleDeploymentManagerHook.get_conn")
     def test_delete_deployment_delete_fails(self, mock_get_conn):
-
         resp = {"error": {"errors": [{"message": "error deleting things.", "domain": "global"}]}}
 
         mock_get_conn.return_value.deployments.return_value.delete.return_value.execute.return_value = resp

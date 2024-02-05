@@ -25,14 +25,14 @@ Dataform lets you manage data transformation in the Extraction, Loading, and Tra
 for data integration. After raw data is extracted from source systems and loaded into BigQuery, Dataform
 helps you to transform it into a well-defined, tested, and documented suite of data tables.
 
-For more information about the task visit `Dataform production documentation <Product documentation <https://cloud.google.com/dataform/docs/reference>`__
+For more information about the task visit `Dataform production documentation <Product documentation <https://cloud.google.com/dataform/docs>`__
 
 
 Configuration
 -------------
 
 Before you can use the Dataform operators you need to initialize repository and workspace, for more information
-about this visit `Dataform Production documentation <Product documentation <https://cloud.google.com/dataform/docs/reference>`__
+about this visit `Dataform Production documentation <Product documentation <https://cloud.google.com/dataform/docs>`__
 
 Create Repository
 -----------------
@@ -119,6 +119,19 @@ To get a Workflow Invocation you can use:
     :dedent: 4
     :start-after: [START howto_operator_get_workflow_invocation]
     :end-before: [END howto_operator_get_workflow_invocation]
+
+Query Workflow Invocation Action
+--------------------------------
+
+To query Workflow Invocation Actions you can use:
+
+:class:`~airflow.providers.google.cloud.operators.dataform.DataformQueryWorkflowInvocationActionsOperator`
+
+.. exampleinclude:: /../../tests/system/providers/google/cloud/dataform/example_dataform.py
+    :language: python
+    :dedent: 4
+    :start-after: [START howto_operator_query_workflow_invocation_actions]
+    :end-before: [END howto_operator_query_workflow_invocation_actions]
 
 Cancel Workflow Invocation
 --------------------------

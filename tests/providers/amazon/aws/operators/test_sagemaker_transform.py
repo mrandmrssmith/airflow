@@ -21,11 +21,15 @@ import copy
 from unittest import mock
 
 import pytest
+from botocore.exceptions import ClientError
+from openlineage.client.run import Dataset
 
-from airflow.exceptions import AirflowException
+from airflow.exceptions import AirflowException, TaskDeferred
 from airflow.providers.amazon.aws.hooks.sagemaker import SageMakerHook
 from airflow.providers.amazon.aws.operators import sagemaker
 from airflow.providers.amazon.aws.operators.sagemaker import SageMakerTransformOperator
+from airflow.providers.amazon.aws.triggers.sagemaker import SageMakerTrigger
+from airflow.providers.openlineage.extractors import OperatorLineage
 
 EXPECTED_INTEGER_FIELDS: list[list[str]] = [
     ["Transform", "TransformResources", "InstanceCount"],
@@ -73,29 +77,33 @@ class TestSageMakerTransformOperator:
             check_interval=5,
         )
 
-    @mock.patch.object(SageMakerHook, "get_conn")
+    @mock.patch.object(SageMakerHook, "describe_transform_job")
     @mock.patch.object(SageMakerHook, "create_model")
+    @mock.patch.object(SageMakerHook, "describe_model")
     @mock.patch.object(SageMakerHook, "create_transform_job")
     @mock.patch.object(sagemaker, "serialize", return_value="")
-    def test_integer_fields(self, serialize, mock_transform, mock_model, mock_client):
-        mock_transform.return_value = {
+    def test_integer_fields(self, _, mock_create_transform, __, ___, mock_desc):
+        mock_desc.side_effect = [ClientError({"Error": {"Code": "ValidationException"}}, "op"), None]
+        mock_create_transform.return_value = {
             "TransformJobArn": "test_arn",
             "ResponseMetadata": {"HTTPStatusCode": 200},
         }
         self.sagemaker.execute(None)
         assert self.sagemaker.integer_fields == EXPECTED_INTEGER_FIELDS
-        for (key1, key2, *key3) in EXPECTED_INTEGER_FIELDS:
+        for key1, key2, *key3 in EXPECTED_INTEGER_FIELDS:
             if key3:
                 (key3,) = key3
                 assert self.sagemaker.config[key1][key2][key3] == int(self.sagemaker.config[key1][key2][key3])
             else:
                 self.sagemaker.config[key1][key2] == int(self.sagemaker.config[key1][key2])
 
-    @mock.patch.object(SageMakerHook, "get_conn")
+    @mock.patch.object(SageMakerHook, "describe_transform_job")
     @mock.patch.object(SageMakerHook, "create_model")
+    @mock.patch.object(SageMakerHook, "describe_model")
     @mock.patch.object(SageMakerHook, "create_transform_job")
     @mock.patch.object(sagemaker, "serialize", return_value="")
-    def test_execute(self, serialize, mock_transform, mock_model, mock_client):
+    def test_execute(self, _, mock_transform, __, mock_model, mock_desc):
+        mock_desc.side_effect = [ClientError({"Error": {"Code": "ValidationException"}}, "op"), None]
         mock_transform.return_value = {
             "TransformJobArn": "test_arn",
             "ResponseMetadata": {"HTTPStatusCode": 200},
@@ -109,10 +117,11 @@ class TestSageMakerTransformOperator:
             max_ingestion_time=None,
         )
 
-    @mock.patch.object(SageMakerHook, "get_conn")
+    @mock.patch.object(SageMakerHook, "describe_transform_job")
     @mock.patch.object(SageMakerHook, "create_model")
     @mock.patch.object(SageMakerHook, "create_transform_job")
-    def test_execute_with_failure(self, mock_transform, mock_model, mock_client):
+    def test_execute_with_failure(self, mock_transform, _, mock_desc):
+        mock_desc.side_effect = [ClientError({"Error": {"Code": "ValidationException"}}, "op"), None]
         mock_transform.return_value = {
             "TransformJobArn": "test_arn",
             "ResponseMetadata": {"HTTPStatusCode": 404},
@@ -120,17 +129,18 @@ class TestSageMakerTransformOperator:
         with pytest.raises(AirflowException):
             self.sagemaker.execute(None)
 
-    @mock.patch.object(SageMakerHook, "get_conn")
+    @mock.patch.object(SageMakerHook, "describe_transform_job")
     @mock.patch.object(SageMakerHook, "create_transform_job")
+    @mock.patch.object(SageMakerHook, "create_model")
+    @mock.patch.object(SageMakerHook, "describe_model")
     @mock.patch.object(sagemaker, "serialize", return_value="")
-    def test_execute_with_check_if_job_exists(self, serialize, mock_transform, mock_client):
+    def test_execute_with_check_if_job_exists(self, _, __, ___, mock_transform, mock_desc):
+        mock_desc.side_effect = [ClientError({"Error": {"Code": "ValidationException"}}, "op"), None]
         mock_transform.return_value = {
             "TransformJobArn": "test_arn",
             "ResponseMetadata": {"HTTPStatusCode": 200},
         }
-        self.sagemaker._check_if_transform_job_exists = mock.MagicMock()
         self.sagemaker.execute(None)
-        self.sagemaker._check_if_transform_job_exists.assert_called_once()
         mock_transform.assert_called_once_with(
             CREATE_TRANSFORM_PARAMS_INTEGER_FIELDS,
             wait_for_completion=False,
@@ -138,18 +148,18 @@ class TestSageMakerTransformOperator:
             max_ingestion_time=None,
         )
 
-    @mock.patch.object(SageMakerHook, "get_conn")
+    @mock.patch.object(SageMakerHook, "describe_transform_job")
     @mock.patch.object(SageMakerHook, "create_transform_job")
+    @mock.patch.object(SageMakerHook, "create_model")
+    @mock.patch.object(SageMakerHook, "describe_model")
     @mock.patch.object(sagemaker, "serialize", return_value="")
-    def test_execute_without_check_if_job_exists(self, serialize, mock_transform, mock_client):
+    def test_execute_without_check_if_job_exists(self, _, __, ___, mock_transform, ____):
         mock_transform.return_value = {
             "TransformJobArn": "test_arn",
             "ResponseMetadata": {"HTTPStatusCode": 200},
         }
         self.sagemaker.check_if_job_exists = False
-        self.sagemaker._check_if_transform_job_exists = mock.MagicMock()
         self.sagemaker.execute(None)
-        self.sagemaker._check_if_transform_job_exists.assert_not_called()
         mock_transform.assert_called_once_with(
             CREATE_TRANSFORM_PARAMS_INTEGER_FIELDS,
             wait_for_completion=False,
@@ -157,24 +167,92 @@ class TestSageMakerTransformOperator:
             max_ingestion_time=None,
         )
 
-    @mock.patch.object(SageMakerHook, "get_conn")
-    @mock.patch.object(SageMakerHook, "list_transform_jobs")
-    def test_check_if_job_exists_increment(self, mock_list_transform_jobs, mock_client):
-        self.sagemaker.check_if_job_exists = True
-        self.sagemaker.action_if_job_exists = "increment"
-        mock_list_transform_jobs.return_value = [{"TransformJobName": "job_name"}]
-        self.sagemaker._check_if_transform_job_exists()
+    @mock.patch("airflow.providers.amazon.aws.operators.sagemaker.SageMakerTransformOperator.defer")
+    @mock.patch.object(
+        SageMakerHook,
+        "describe_transform_job",
+        return_value={"TransformJobStatus": "Failed", "FailureReason": "it failed"},
+    )
+    @mock.patch.object(SageMakerHook, "create_transform_job")
+    @mock.patch.object(SageMakerHook, "create_model")
+    def test_operator_failed_before_defer(self, _, mock_transform, mock_describe_transform_job, mock_defer):
+        mock_transform.return_value = {
+            "TransformJobArn": "test_arn",
+            "ResponseMetadata": {"HTTPStatusCode": 200},
+        }
+        self.sagemaker.deferrable = True
+        self.sagemaker.wait_for_completion = True
+        self.sagemaker.check_if_job_exists = False
 
-        expected_config = copy.deepcopy(CONFIG)
-        # Expect to see TransformJobName suffixed with "-2" because we return one existing job
-        expected_config["Transform"]["TransformJobName"] = "job_name-2"
-        assert self.sagemaker.config == expected_config
-
-    @mock.patch.object(SageMakerHook, "get_conn")
-    @mock.patch.object(SageMakerHook, "list_transform_jobs")
-    def test_check_if_job_exists_fail(self, mock_list_transform_jobs, mock_client):
-        self.sagemaker.check_if_job_exists = True
-        self.sagemaker.action_if_job_exists = "fail"
-        mock_list_transform_jobs.return_value = [{"TransformJobName": "job_name"}]
         with pytest.raises(AirflowException):
-            self.sagemaker._check_if_transform_job_exists()
+            self.sagemaker.execute(context=None)
+        assert not mock_defer.called
+
+    @mock.patch("airflow.providers.amazon.aws.operators.sagemaker.SageMakerTransformOperator.defer")
+    @mock.patch.object(SageMakerHook, "describe_model")
+    @mock.patch.object(
+        SageMakerHook, "describe_transform_job", return_value={"TransformJobStatus": "Completed"}
+    )
+    @mock.patch.object(SageMakerHook, "create_transform_job")
+    @mock.patch.object(SageMakerHook, "create_model")
+    def test_operator_complete_before_defer(
+        self, _, mock_transform, mock_describe_transform_job, mock_describe_model, mock_defer
+    ):
+        mock_transform.return_value = {
+            "TransformJobArn": "test_arn",
+            "ResponseMetadata": {"HTTPStatusCode": 200},
+        }
+        mock_describe_model.return_value = {"PrimaryContainer": {"ModelPackageName": "package-name"}}
+        self.sagemaker.deferrable = True
+        self.sagemaker.wait_for_completion = True
+        self.sagemaker.check_if_job_exists = False
+
+        self.sagemaker.execute(context=None)
+        assert not mock_defer.called
+
+    @mock.patch.object(
+        SageMakerHook, "describe_transform_job", return_value={"TransformJobStatus": "InProgress"}
+    )
+    @mock.patch.object(SageMakerHook, "create_transform_job")
+    @mock.patch.object(SageMakerHook, "create_model")
+    def test_operator_defer(self, _, mock_transform, mock_describe_transform_job):
+        mock_transform.return_value = {
+            "TransformJobArn": "test_arn",
+            "ResponseMetadata": {"HTTPStatusCode": 200},
+        }
+        self.sagemaker.deferrable = True
+        self.sagemaker.wait_for_completion = True
+        self.sagemaker.check_if_job_exists = False
+
+        with pytest.raises(TaskDeferred) as exc:
+            self.sagemaker.execute(context=None)
+
+        assert isinstance(exc.value.trigger, SageMakerTrigger), "Trigger is not a SagemakerTrigger"
+
+    @mock.patch.object(SageMakerHook, "describe_transform_job")
+    @mock.patch.object(SageMakerHook, "create_model")
+    @mock.patch.object(SageMakerHook, "describe_model")
+    @mock.patch.object(SageMakerHook, "get_conn")
+    @mock.patch.object(SageMakerHook, "create_transform_job")
+    def test_operator_lineage_data(self, mock_transform, mock_conn, mock_model, _, mock_desc):
+        self.sagemaker.check_if_job_exists = False
+        mock_conn.return_value.describe_model_package.return_value = {
+            "InferenceSpecification": {"Containers": [{"ModelDataUrl": "s3://model-bucket/model-path"}]},
+        }
+        mock_model.return_value = {"PrimaryContainer": {"ModelPackageName": "package-name"}}
+        mock_desc.return_value = {
+            "TransformInput": {"DataSource": {"S3DataSource": {"S3Uri": "s3://input-bucket/input-path"}}},
+            "TransformOutput": {"S3OutputPath": "s3://output-bucket/output-path"},
+        }
+        mock_transform.return_value = {
+            "TransformJobArn": "test_arn",
+            "ResponseMetadata": {"HTTPStatusCode": 200},
+        }
+        self.sagemaker.execute(None)
+        assert self.sagemaker.get_openlineage_facets_on_complete(None) == OperatorLineage(
+            inputs=[
+                Dataset(namespace="s3://input-bucket", name="input-path"),
+                Dataset(namespace="s3://model-bucket", name="model-path"),
+            ],
+            outputs=[Dataset(namespace="s3://output-bucket", name="output-path")],
+        )

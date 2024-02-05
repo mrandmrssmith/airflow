@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable, Sequence
 
-from airflow.exceptions import AirflowException
+from airflow.exceptions import AirflowException, AirflowSkipException
 from airflow.providers.google.cloud.hooks.dataflow import (
     DEFAULT_DATAFLOW_LOCATION,
     DataflowHook,
@@ -49,10 +49,6 @@ class DataflowJobStatusSensor(BaseSensorOperator):
     :param location: The location of the Dataflow job (for example europe-west1). See:
         https://cloud.google.com/dataflow/docs/concepts/regional-endpoints
     :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled. See:
-        https://developers.google.com/identity/protocols/oauth2/service-account#delegatingauthority
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -73,7 +69,6 @@ class DataflowJobStatusSensor(BaseSensorOperator):
         project_id: str | None = None,
         location: str = DEFAULT_DATAFLOW_LOCATION,
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         **kwargs,
     ) -> None:
@@ -85,7 +80,6 @@ class DataflowJobStatusSensor(BaseSensorOperator):
         self.project_id = project_id
         self.location = location
         self.gcp_conn_id = gcp_conn_id
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
         self.hook: DataflowHook | None = None
 
@@ -97,7 +91,6 @@ class DataflowJobStatusSensor(BaseSensorOperator):
         )
         self.hook = DataflowHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
 
@@ -113,7 +106,11 @@ class DataflowJobStatusSensor(BaseSensorOperator):
         if job_status in self.expected_statuses:
             return True
         elif job_status in DataflowJobStatus.TERMINAL_STATES:
-            raise AirflowException(f"Job with id '{self.job_id}' is already in terminal state: {job_status}")
+            # TODO: remove this if check when min_airflow_version is set to higher than 2.7.1
+            message = f"Job with id '{self.job_id}' is already in terminal state: {job_status}"
+            if self.soft_fail:
+                raise AirflowSkipException(message)
+            raise AirflowException(message)
 
         return False
 
@@ -137,9 +134,6 @@ class DataflowJobMetricsSensor(BaseSensorOperator):
     :param location: The location of the Dataflow job (for example europe-west1). See:
         https://cloud.google.com/dataflow/docs/concepts/regional-endpoints
     :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -161,7 +155,6 @@ class DataflowJobMetricsSensor(BaseSensorOperator):
         project_id: str | None = None,
         location: str = DEFAULT_DATAFLOW_LOCATION,
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         **kwargs,
     ) -> None:
@@ -172,14 +165,12 @@ class DataflowJobMetricsSensor(BaseSensorOperator):
         self.fail_on_terminal_state = fail_on_terminal_state
         self.location = location
         self.gcp_conn_id = gcp_conn_id
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
         self.hook: DataflowHook | None = None
 
     def poke(self, context: Context) -> bool:
         self.hook = DataflowHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
 
@@ -191,9 +182,11 @@ class DataflowJobMetricsSensor(BaseSensorOperator):
             )
             job_status = job["currentState"]
             if job_status in DataflowJobStatus.TERMINAL_STATES:
-                raise AirflowException(
-                    f"Job with id '{self.job_id}' is already in terminal state: {job_status}"
-                )
+                # TODO: remove this if check when min_airflow_version is set to higher than 2.7.1
+                message = f"Job with id '{self.job_id}' is already in terminal state: {job_status}"
+                if self.soft_fail:
+                    raise AirflowSkipException(message)
+                raise AirflowException(message)
 
         result = self.hook.fetch_job_metrics_by_id(
             job_id=self.job_id,
@@ -222,9 +215,6 @@ class DataflowJobMessagesSensor(BaseSensorOperator):
         If set to None or missing, the default project_id from the Google Cloud connection is used.
     :param location: Job location.
     :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -246,7 +236,6 @@ class DataflowJobMessagesSensor(BaseSensorOperator):
         project_id: str | None = None,
         location: str = DEFAULT_DATAFLOW_LOCATION,
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         **kwargs,
     ) -> None:
@@ -257,14 +246,12 @@ class DataflowJobMessagesSensor(BaseSensorOperator):
         self.fail_on_terminal_state = fail_on_terminal_state
         self.location = location
         self.gcp_conn_id = gcp_conn_id
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
         self.hook: DataflowHook | None = None
 
     def poke(self, context: Context) -> bool:
         self.hook = DataflowHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
 
@@ -276,9 +263,11 @@ class DataflowJobMessagesSensor(BaseSensorOperator):
             )
             job_status = job["currentState"]
             if job_status in DataflowJobStatus.TERMINAL_STATES:
-                raise AirflowException(
-                    f"Job with id '{self.job_id}' is already in terminal state: {job_status}"
-                )
+                # TODO: remove this if check when min_airflow_version is set to higher than 2.7.1
+                message = f"Job with id '{self.job_id}' is already in terminal state: {job_status}"
+                if self.soft_fail:
+                    raise AirflowSkipException(message)
+                raise AirflowException(message)
 
         result = self.hook.fetch_job_messages_by_id(
             job_id=self.job_id,
@@ -307,9 +296,6 @@ class DataflowJobAutoScalingEventsSensor(BaseSensorOperator):
         If set to None or missing, the default project_id from the Google Cloud connection is used.
     :param location: Job location.
     :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -331,7 +317,6 @@ class DataflowJobAutoScalingEventsSensor(BaseSensorOperator):
         project_id: str | None = None,
         location: str = DEFAULT_DATAFLOW_LOCATION,
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         **kwargs,
     ) -> None:
@@ -342,14 +327,12 @@ class DataflowJobAutoScalingEventsSensor(BaseSensorOperator):
         self.fail_on_terminal_state = fail_on_terminal_state
         self.location = location
         self.gcp_conn_id = gcp_conn_id
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
         self.hook: DataflowHook | None = None
 
     def poke(self, context: Context) -> bool:
         self.hook = DataflowHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
 
@@ -361,9 +344,11 @@ class DataflowJobAutoScalingEventsSensor(BaseSensorOperator):
             )
             job_status = job["currentState"]
             if job_status in DataflowJobStatus.TERMINAL_STATES:
-                raise AirflowException(
-                    f"Job with id '{self.job_id}' is already in terminal state: {job_status}"
-                )
+                # TODO: remove this if check when min_airflow_version is set to higher than 2.7.1
+                message = f"Job with id '{self.job_id}' is already in terminal state: {job_status}"
+                if self.soft_fail:
+                    raise AirflowSkipException(message)
+                raise AirflowException(message)
 
         result = self.hook.fetch_job_autoscaling_events_by_id(
             job_id=self.job_id,

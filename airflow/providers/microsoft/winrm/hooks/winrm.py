@@ -22,14 +22,9 @@ from winrm.protocol import Protocol
 
 from airflow.exceptions import AirflowException
 from airflow.hooks.base import BaseHook
+from airflow.utils.platform import getuser
 
-try:
-    from airflow.utils.platform import getuser
-except ImportError:
-    from getpass import getuser  # type: ignore[misc]
-
-
-# TODO: Fixme please - I have too complex implementation
+# TODO: FIXME please - I have too complex implementation
 
 
 class WinRMHook(BaseHook):

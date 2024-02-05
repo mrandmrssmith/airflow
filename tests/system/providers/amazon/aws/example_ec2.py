@@ -21,10 +21,17 @@ from operator import itemgetter
 
 import boto3
 
-from airflow import DAG
 from airflow.decorators import task
 from airflow.models.baseoperator import chain
-from airflow.providers.amazon.aws.operators.ec2 import EC2StartInstanceOperator, EC2StopInstanceOperator
+from airflow.models.dag import DAG
+from airflow.providers.amazon.aws.operators.ec2 import (
+    EC2CreateInstanceOperator,
+    EC2HibernateInstanceOperator,
+    EC2RebootInstanceOperator,
+    EC2StartInstanceOperator,
+    EC2StopInstanceOperator,
+    EC2TerminateInstanceOperator,
+)
 from airflow.providers.amazon.aws.sensors.ec2 import EC2InstanceStateSensor
 from airflow.utils.trigger_rule import TriggerRule
 from tests.system.providers.amazon.aws.utils import ENV_ID_KEY, SystemTestContextBuilder
@@ -34,7 +41,8 @@ DAG_ID = "example_ec2"
 sys_test_context_task = SystemTestContextBuilder().build()
 
 
-def _get_latest_ami_id():
+@task
+def get_latest_ami_id():
     """Returns the AMI ID of the most recently-created Amazon Linux image"""
 
     # Amazon is retiring AL2 in 2023 and replacing it with Amazon Linux 2022.
@@ -42,13 +50,25 @@ def _get_latest_ami_id():
     # on how they name the new images.  This page should have AL2022 info when
     # it comes available: https://aws.amazon.com/linux/amazon-linux-2022/faqs/
     image_prefix = "Amazon Linux*"
+    root_device_name = "/dev/xvda"
 
     images = boto3.client("ec2").describe_images(
-        Filters=[{"Name": "description", "Values": [image_prefix]}], Owners=["amazon"]
+        Filters=[
+            {"Name": "description", "Values": [image_prefix]},
+            {
+                "Name": "architecture",
+                "Values": ["x86_64"],
+            },  # t3 instances are only compatible with x86 architecture
+            {
+                "Name": "root-device-type",
+                "Values": ["ebs"],
+            },  # instances which are capable of hibernation need to use an EBS-backed AMI
+            {"Name": "root-device-name", "Values": [root_device_name]},
+        ],
+        Owners=["amazon"],
     )
     # Sort on CreationDate
-    sorted_images = sorted(images["Images"], key=itemgetter("CreationDate"), reverse=True)
-    return sorted_images[0]["ImageId"]
+    return max(images["Images"], key=itemgetter("CreationDate"))["ImageId"]
 
 
 @task
@@ -62,35 +82,14 @@ def create_key_pair(key_name: str):
     return key_pair_id
 
 
-@task
-def create_instance(instance_name: str, key_pair_id: str):
-    client = boto3.client("ec2")
-
-    # Create the instance
-    instance_id = client.run_instances(
-        ImageId=_get_latest_ami_id(),
-        MinCount=1,
-        MaxCount=1,
-        InstanceType="t2.micro",
-        KeyName=key_pair_id,
-        TagSpecifications=[{"ResourceType": "instance", "Tags": [{"Key": "Name", "Value": instance_name}]}],
-    )["Instances"][0]["InstanceId"]
-
-    # Wait for it to exist
-    waiter = client.get_waiter("instance_exists")
-    waiter.wait(InstanceIds=[instance_id])
-
-    return instance_id
-
-
-@task(trigger_rule=TriggerRule.ALL_DONE)
-def terminate_instance(instance: str):
-    boto3.client("ec2").terminate_instances(InstanceIds=[instance])
-
-
 @task(trigger_rule=TriggerRule.ALL_DONE)
 def delete_key_pair(key_pair_id: str):
     boto3.client("ec2").delete_key_pair(KeyName=key_pair_id)
+
+
+@task
+def parse_response(instance_ids: list):
+    return instance_ids[0]
 
 
 with DAG(
@@ -102,9 +101,47 @@ with DAG(
 ) as dag:
     test_context = sys_test_context_task()
     env_id = test_context[ENV_ID_KEY]
-
+    instance_name = f"{env_id}-instance"
     key_name = create_key_pair(key_name=f"{env_id}_key_pair")
-    instance_id = create_instance(instance_name=f"{env_id}-instance", key_pair_id=key_name)
+    image_id = get_latest_ami_id()
+
+    config = {
+        "InstanceType": "t3.micro",
+        "KeyName": key_name,
+        "TagSpecifications": [
+            {"ResourceType": "instance", "Tags": [{"Key": "Name", "Value": instance_name}]}
+        ],
+        # Use IMDSv2 for greater security, see the following doc for more details:
+        # https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html
+        "MetadataOptions": {"HttpEndpoint": "enabled", "HttpTokens": "required"},
+        "HibernationOptions": {"Configured": True},
+        "BlockDeviceMappings": [
+            {"DeviceName": "/dev/xvda", "Ebs": {"Encrypted": True, "DeleteOnTermination": True}}
+        ],
+    }
+
+    # EC2CreateInstanceOperator creates and starts the EC2 instances. To test the EC2StartInstanceOperator,
+    # we will stop the instance, then start them again before terminating them.
+
+    # [START howto_operator_ec2_create_instance]
+    create_instance = EC2CreateInstanceOperator(
+        task_id="create_instance",
+        image_id=image_id,
+        max_count=1,
+        min_count=1,
+        config=config,
+    )
+    # [END howto_operator_ec2_create_instance]
+    create_instance.wait_for_completion = True
+    instance_id = parse_response(create_instance.output)
+    # [START howto_operator_ec2_stop_instance]
+    stop_instance = EC2StopInstanceOperator(
+        task_id="stop_instance",
+        instance_id=instance_id,
+    )
+    # [END howto_operator_ec2_stop_instance]
+    stop_instance.trigger_rule = TriggerRule.ALL_DONE
+
     # [START howto_operator_ec2_start_instance]
     start_instance = EC2StartInstanceOperator(
         task_id="start_instance",
@@ -120,25 +157,47 @@ with DAG(
     )
     # [END howto_sensor_ec2_instance_state]
 
-    # [START howto_operator_ec2_stop_instance]
-    stop_instance = EC2StopInstanceOperator(
-        task_id="stop_instance",
-        instance_id=instance_id,
+    # [START howto_operator_ec2_reboot_instance]
+    reboot_instance = EC2RebootInstanceOperator(
+        task_id="reboot_instace",
+        instance_ids=instance_id,
     )
-    # [END howto_operator_ec2_stop_instance]
-    stop_instance.trigger_rule = TriggerRule.ALL_DONE
+    # [END howto_operator_ec2_reboot_instance]
+    reboot_instance.wait_for_completion = True
 
+    # [START howto_operator_ec2_hibernate_instance]
+    hibernate_instance = EC2HibernateInstanceOperator(
+        task_id="hibernate_instace",
+        instance_ids=instance_id,
+    )
+    # [END howto_operator_ec2_hibernate_instance]
+    hibernate_instance.wait_for_completion = True
+    hibernate_instance.poll_interval = 60
+    hibernate_instance.max_attempts = 40
+
+    # [START howto_operator_ec2_terminate_instance]
+    terminate_instance = EC2TerminateInstanceOperator(
+        task_id="terminate_instance",
+        instance_ids=instance_id,
+        wait_for_completion=True,
+    )
+    # [END howto_operator_ec2_terminate_instance]
+    terminate_instance.trigger_rule = TriggerRule.ALL_DONE
     chain(
         # TEST SETUP
         test_context,
         key_name,
-        instance_id,
+        image_id,
         # TEST BODY
+        create_instance,
+        instance_id,
+        stop_instance,
         start_instance,
         await_instance,
-        stop_instance,
+        reboot_instance,
+        hibernate_instance,
+        terminate_instance,
         # TEST TEARDOWN
-        terminate_instance(instance_id),
         delete_key_pair(key_name),
     )
 

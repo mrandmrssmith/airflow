@@ -23,14 +23,22 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
-from airflow import models
-from airflow.providers.google.leveldb.operators.leveldb import LevelDBOperator
+import pytest
+
+from airflow.exceptions import AirflowOptionalProviderFeatureException
+from airflow.models.dag import DAG
+
+try:
+    from airflow.providers.google.leveldb.operators.leveldb import LevelDBOperator
+except AirflowOptionalProviderFeatureException:
+    pytest.skip("LevelDB not available", allow_module_level=True)
+
 from airflow.utils.trigger_rule import TriggerRule
 
 ENV_ID = os.environ.get("SYSTEM_TESTS_ENV_ID")
 DAG_ID = "example_leveldb"
 
-with models.DAG(
+with DAG(
     DAG_ID,
     start_date=datetime(2021, 1, 1),
     schedule="@once",

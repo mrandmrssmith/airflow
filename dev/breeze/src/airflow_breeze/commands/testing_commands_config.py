@@ -23,51 +23,185 @@ TESTING_COMMANDS: dict[str, str | list[str]] = {
 TESTING_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
     "breeze testing tests": [
         {
-            "name": "Basic flag for tests command",
+            "name": "Select test types to run (tests can also be selected by command args individually)",
             "options": [
                 "--test-type",
+                "--parallel-test-types",
+                "--excluded-parallel-test-types",
+            ],
+        },
+        {
+            "name": "Test options",
+            "options": [
                 "--test-timeout",
+                "--enable-coverage",
+                "--collect-only",
                 "--db-reset",
+                "--skip-provider-tests",
+            ],
+        },
+        {
+            "name": "Selectively run DB or non-DB tests",
+            "options": [
+                "--run-db-tests-only",
+                "--skip-db-tests",
+            ],
+        },
+        {
+            "name": "Test environment",
+            "options": [
+                "--integration",
                 "--backend",
                 "--python",
                 "--postgres-version",
                 "--mysql-version",
-                "--mssql-version",
-                "--integration",
+                "--forward-credentials",
             ],
         },
         {
             "name": "Options for parallel test commands",
             "options": [
                 "--run-in-parallel",
+                "--use-xdist",
                 "--parallelism",
-                "--test-types",
                 "--skip-cleanup",
                 "--debug-resources",
                 "--include-success-outputs",
-                "--full-tests-needed",
             ],
         },
         {
             "name": "Advanced flag for tests command",
             "options": [
                 "--image-tag",
+                "--github-repository",
+                "--use-airflow-version",
                 "--mount-sources",
+                "--upgrade-boto",
+                "--downgrade-sqlalchemy",
+                "--downgrade-pendulum",
+                "--remove-arm-packages",
+                "--skip-docker-compose-down",
+            ],
+        },
+    ],
+    "breeze testing non-db-tests": [
+        {
+            "name": "Select test types to run",
+            "options": [
+                "--parallel-test-types",
+                "--excluded-parallel-test-types",
+            ],
+        },
+        {
+            "name": "Test options",
+            "options": [
+                "--test-timeout",
+                "--enable-coverage",
+                "--collect-only",
+                "--skip-provider-tests",
+            ],
+        },
+        {
+            "name": "Test environment",
+            "options": [
+                "--python",
+                "--forward-credentials",
+            ],
+        },
+        {
+            "name": "Options for parallel test commands",
+            "options": [
+                "--parallelism",
+                "--skip-cleanup",
+                "--debug-resources",
+                "--include-success-outputs",
+            ],
+        },
+        {
+            "name": "Advanced flag for tests command",
+            "options": [
+                "--image-tag",
+                "--github-repository",
+                "--use-airflow-version",
+                "--mount-sources",
+                "--upgrade-boto",
+                "--downgrade-sqlalchemy",
+                "--downgrade-pendulum",
+                "--remove-arm-packages",
+                "--skip-docker-compose-down",
+            ],
+        },
+    ],
+    "breeze testing db-tests": [
+        {
+            "name": "Select tests to run",
+            "options": [
+                "--parallel-test-types",
+                "--excluded-parallel-test-types",
+            ],
+        },
+        {
+            "name": "Test options",
+            "options": [
+                "--test-timeout",
+                "--enable-coverage",
+                "--collect-only",
+                "--skip-provider-tests",
+            ],
+        },
+        {
+            "name": "Test environment",
+            "options": [
+                "--backend",
+                "--python",
+                "--postgres-version",
+                "--mysql-version",
+                "--forward-credentials",
+            ],
+        },
+        {
+            "name": "Options for parallel test commands",
+            "options": [
+                "--parallelism",
+                "--skip-cleanup",
+                "--debug-resources",
+                "--include-success-outputs",
+            ],
+        },
+        {
+            "name": "Advanced flag for tests command",
+            "options": [
+                "--image-tag",
+                "--github-repository",
+                "--use-airflow-version",
+                "--mount-sources",
+                "--upgrade-boto",
+                "--downgrade-sqlalchemy",
+                "--downgrade-pendulum",
+                "--remove-arm-packages",
+                "--skip-docker-compose-down",
             ],
         },
     ],
     "breeze testing integration-tests": [
         {
-            "name": "Basic flag for integration tests command",
+            "name": "Test options",
+            "options": [
+                "--test-timeout",
+                "--enable-coverage",
+                "--db-reset",
+                "--skip-provider-tests",
+            ],
+        },
+        {
+            "name": "Test environment",
             "options": [
                 "--integration",
-                "--test-timeout",
-                "--db-reset",
                 "--backend",
                 "--python",
                 "--postgres-version",
                 "--mysql-version",
-                "--mssql-version",
+                "--forward-credentials",
             ],
         },
         {
@@ -75,12 +209,22 @@ TESTING_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
             "options": [
                 "--image-tag",
                 "--mount-sources",
+                "--github-repository",
             ],
         },
     ],
     "breeze testing helm-tests": [
         {
-            "name": "Advanced flag for helms-tests command",
+            "name": "Flags for helms-tests command",
+            "options": [
+                "--helm-test-package",
+                "--test-timeout",
+                "--use-xdist",
+                "--parallelism",
+            ],
+        },
+        {
+            "name": "Advanced flags for helms-tests command",
             "options": [
                 "--image-tag",
                 "--mount-sources",
@@ -95,6 +239,7 @@ TESTING_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
                 "--image-name",
                 "--image-tag",
                 "--python",
+                "--skip-docker-compose-deletion",
                 "--github-repository",
             ],
         }

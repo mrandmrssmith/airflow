@@ -19,14 +19,9 @@ from __future__ import annotations
 
 import datetime
 import decimal
-import unittest
 from unittest import mock
 
 import pytest
-from MySQLdb import ProgrammingError
-from parameterized import parameterized
-
-from airflow.providers.google.cloud.transfers.mysql_to_gcs import MySQLToGCSOperator
 
 TASK_ID = "test-mysql-to-gcs"
 MYSQL_CONN_ID = "mysql_conn_test"
@@ -69,8 +64,16 @@ CUSTOM_SCHEMA_JSON = [
     b'{"mode": "REQUIRED", "name": "some_num", "type": "TIMESTAMP"}]',
 ]
 
+try:
+    from MySQLdb import ProgrammingError
 
-class TestMySqlToGoogleCloudStorageOperator(unittest.TestCase):
+    from airflow.providers.google.cloud.transfers.mysql_to_gcs import MySQLToGCSOperator
+except ImportError:
+    pytest.skip("MySQL not available", allow_module_level=True)
+
+
+@pytest.mark.backend("mysql")
+class TestMySqlToGoogleCloudStorageOperator:
     def test_init(self):
         """Test MySqlToGoogleCloudStorageOperator instance is properly initialized."""
         op = MySQLToGCSOperator(
@@ -88,7 +91,8 @@ class TestMySqlToGoogleCloudStorageOperator(unittest.TestCase):
         assert op.export_format == "csv"
         assert op.field_delimiter == "|"
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "value, schema_type, expected",
         [
             ("string", None, "string"),
             (datetime.date(1970, 1, 2), None, "1970-01-02 00:00:00"),
@@ -103,7 +107,7 @@ class TestMySqlToGoogleCloudStorageOperator(unittest.TestCase):
             (b"bytes", "BYTES", "Ynl0ZXM="),
             (b"\x00\x01", "INTEGER", 1),
             (None, "BYTES", None),
-        ]
+        ],
     )
     def test_convert_type(self, value, schema_type, expected):
         op = MySQLToGCSOperator(

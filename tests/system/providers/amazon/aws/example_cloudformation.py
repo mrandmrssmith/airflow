@@ -19,8 +19,8 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from airflow import DAG
 from airflow.models.baseoperator import chain
+from airflow.models.dag import DAG
 from airflow.providers.amazon.aws.operators.cloud_formation import (
     CloudFormationCreateStackOperator,
     CloudFormationDeleteStackOperator,
@@ -79,6 +79,7 @@ with DAG(
         stack_name=cloudformation_stack_name,
     )
     # [END howto_sensor_cloudformation_create_stack]
+    wait_for_stack_create.poke_interval = 10
 
     # [START howto_operator_cloudformation_delete_stack]
     delete_stack = CloudFormationDeleteStackOperator(
@@ -94,6 +95,7 @@ with DAG(
         stack_name=cloudformation_stack_name,
     )
     # [END howto_sensor_cloudformation_delete_stack]
+    wait_for_stack_delete.poke_interval = 10
 
     chain(
         # TEST SETUP

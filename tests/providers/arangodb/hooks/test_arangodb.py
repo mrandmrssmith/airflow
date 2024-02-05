@@ -18,9 +18,14 @@ from __future__ import annotations
 
 from unittest.mock import Mock, patch
 
+import pytest
+
 from airflow.models import Connection
 from airflow.providers.arangodb.hooks.arangodb import ArangoDBHook
 from airflow.utils import db
+
+pytestmark = pytest.mark.db_test
+
 
 arangodb_client_mock = Mock(name="arangodb_client_for_test")
 
@@ -61,14 +66,13 @@ class TestArangoDBHook:
     )
     def test_query(self, arango_mock):
         arangodb_hook = ArangoDBHook()
-        arangodb_hook.db_conn = Mock(name="arangodb_database_for_test")
+        with patch.object(arangodb_hook, "db_conn"):
+            arangodb_query = "FOR doc IN students RETURN doc"
+            arangodb_hook.query(arangodb_query)
 
-        arangodb_query = "FOR doc IN students RETURN doc"
-        arangodb_hook.query(arangodb_query)
-
-        assert arango_mock.called
-        assert isinstance(arangodb_hook.client, Mock)
-        assert arango_mock.return_value.db.called
+            assert arango_mock.called
+            assert isinstance(arangodb_hook.client, Mock)
+            assert arango_mock.return_value.db.called
 
     @patch(
         "airflow.providers.arangodb.hooks.arangodb.ArangoDBClient",

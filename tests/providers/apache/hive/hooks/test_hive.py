@@ -17,19 +17,28 @@
 # under the License.
 from __future__ import annotations
 
+import pytest
+
+from airflow import PY311
+
+if PY311:
+    pytest.skip(
+        "The tests are skipped because Apache Hive provider is not supported on Python 3.11",
+        allow_module_level=True,
+    )
+
 import datetime
 import itertools
-from collections import OrderedDict, namedtuple
+from collections import namedtuple
 from unittest import mock
 
 import pandas as pd
-import pytest
 from hmsclient import HMSClient
 
 from airflow.exceptions import AirflowException
 from airflow.models.connection import Connection
 from airflow.models.dag import DAG
-from airflow.providers.apache.hive.hooks.hive import HiveMetastoreHook, HiveServer2Hook
+from airflow.providers.apache.hive.hooks.hive import HiveCliHook, HiveMetastoreHook, HiveServer2Hook
 from airflow.secrets.environment_variables import CONN_ENV_PREFIX
 from airflow.utils import timezone
 from airflow.utils.operator_helpers import AIRFLOW_VAR_NAME_FORMAT_MAPPING
@@ -53,6 +62,7 @@ class EmptyMockConnectionCursor(BaseMockConnectionCursor):
         self.iterable = []
 
 
+@pytest.mark.db_test
 class TestHiveCliHook:
     @mock.patch("tempfile.tempdir", "/tmp/")
     @mock.patch("tempfile._RandomNameSequence.__next__")
@@ -74,7 +84,6 @@ class TestHiveCliHook:
                 "AIRFLOW_CTX_DAG_EMAIL": "test@airflow.com",
             },
         ):
-
             hook = MockHiveCliHook()
             hook.run_cli("SHOW DATABASES")
 
@@ -198,7 +207,6 @@ class TestHiveCliHook:
                 dag_run_id_ctx_var_name: "test_dag_run_id",
             },
         ):
-
             hook = MockHiveCliHook()
             mock_popen.return_value = MockSubProcess(output=mock_output)
 
@@ -233,18 +241,18 @@ class TestHiveCliHook:
     def test_load_file_create_table(self, mock_run_cli):
         filepath = "/path/to/input/file"
         table = "output_table"
-        field_dict = OrderedDict([("name", "string"), ("gender", "string")])
+        field_dict = {"name": "string", "gender": "string"}
         fields = ",\n    ".join(f"`{k.strip('`')}` {v}" for k, v in field_dict.items())
 
         hook = MockHiveCliHook()
         hook.load_file(filepath=filepath, table=table, field_dict=field_dict, create=True, recreate=True)
 
         create_table = (
-            "DROP TABLE IF EXISTS {table};\n"
-            "CREATE TABLE IF NOT EXISTS {table} (\n{fields})\n"
+            f"DROP TABLE IF EXISTS {table};\n"
+            f"CREATE TABLE IF NOT EXISTS {table} (\n{fields})\n"
             "ROW FORMAT DELIMITED\n"
             "FIELDS TERMINATED BY ','\n"
-            "STORED AS textfile\n;".format(table=table, fields=fields)
+            "STORED AS textfile\n;"
         )
 
         load_data = f"LOAD DATA LOCAL INPATH '{filepath}' OVERWRITE INTO TABLE {table} ;\n"
@@ -263,16 +271,16 @@ class TestHiveCliHook:
         hook.load_df(df=df, table=table, delimiter=delimiter, encoding=encoding)
 
         assert mock_to_csv.call_count == 1
-        kwargs = mock_to_csv.call_args[1]
+        kwargs = mock_to_csv.call_args.kwargs
         assert kwargs["header"] is False
         assert kwargs["index"] is False
         assert kwargs["sep"] == delimiter
 
         assert mock_load_file.call_count == 1
-        kwargs = mock_load_file.call_args[1]
+        kwargs = mock_load_file.call_args.kwargs
         assert kwargs["delimiter"] == delimiter
         assert kwargs["field_dict"] == {"c": "STRING"}
-        assert isinstance(kwargs["field_dict"], OrderedDict)
+        assert isinstance(kwargs["field_dict"], dict)
         assert kwargs["table"] == table
 
     @mock.patch("airflow.providers.apache.hive.hooks.hive.HiveCliHook.load_file")
@@ -282,26 +290,27 @@ class TestHiveCliHook:
         bools = (True, False)
         for create, recreate in itertools.product(bools, bools):
             mock_load_file.reset_mock()
-            hook.load_df(df=pd.DataFrame({"c": range(0, 10)}), table="t", create=create, recreate=recreate)
+            hook.load_df(df=pd.DataFrame({"c": range(10)}), table="t", create=create, recreate=recreate)
 
             assert mock_load_file.call_count == 1
-            kwargs = mock_load_file.call_args[1]
+            kwargs = mock_load_file.call_args.kwargs
             assert kwargs["create"] == create
             assert kwargs["recreate"] == recreate
 
     @mock.patch("airflow.providers.apache.hive.hooks.hive.HiveCliHook.run_cli")
     def test_load_df_with_data_types(self, mock_run_cli):
-        ord_dict = OrderedDict()
-        ord_dict["b"] = [True]
-        ord_dict["i"] = [-1]
-        ord_dict["t"] = [1]
-        ord_dict["f"] = [0.0]
-        ord_dict["c"] = ["c"]
-        ord_dict["M"] = [datetime.datetime(2018, 1, 1)]
-        ord_dict["O"] = [object()]
-        ord_dict["S"] = [b"STRING"]
-        ord_dict["U"] = ["STRING"]
-        ord_dict["V"] = [None]
+        ord_dict = {
+            "b": [True],
+            "i": [-1],
+            "t": [1],
+            "f": [0.0],
+            "c": ["c"],
+            "M": [datetime.datetime(2018, 1, 1)],
+            "O": [object()],
+            "S": [b"STRING"],
+            "U": ["STRING"],
+            "V": [None],
+        }
         df = pd.DataFrame(ord_dict)
 
         hook = MockHiveCliHook()
@@ -324,7 +333,7 @@ class TestHiveCliHook:
             STORED AS textfile
             ;
         """
-        assert_equal_ignore_multiple_spaces(None, mock_run_cli.call_args_list[0][0][0], query)
+        assert_equal_ignore_multiple_spaces(mock_run_cli.call_args_list[0][0][0], query)
 
 
 class TestHiveMetastoreHook:
@@ -407,16 +416,16 @@ class TestHiveMetastoreHook:
         socket_mock.socket.return_value.connect_ex.return_value = 0
         self.hook.get_metastore_client()
 
-    @mock.patch(
-        "airflow.providers.apache.hive.hooks.hive.HiveMetastoreHook.get_connection",
-        return_value=Connection(host="metastore1.host,metastore2.host", port=9802),
-    )
     @mock.patch("airflow.providers.apache.hive.hooks.hive.socket")
-    def test_ha_hosts(self, socket_mock, get_connection_mock):
-        socket_mock.socket.return_value.connect_ex.return_value = 1
-        with pytest.raises(AirflowException):
-            HiveMetastoreHook()
-        assert socket_mock.socket.call_count == 2
+    def test_ha_hosts(self, socket_mock):
+        with mock.patch(
+            "airflow.providers.apache.hive.hooks.hive.HiveMetastoreHook.get_connection",
+            return_value=Connection(host="metastore1.host,metastore2.host", port=9802),
+        ):
+            socket_mock.socket.return_value.connect_ex.return_value = 1
+            with pytest.raises(AirflowException):
+                HiveMetastoreHook()
+            assert socket_mock.socket.call_count == 2
 
     def test_get_conn(self):
         with mock.patch(
@@ -458,7 +467,6 @@ class TestHiveMetastoreHook:
         )
 
     def test_check_for_named_partition(self):
-
         # Check for existing partition.
 
         partition = f"{self.partition_by}={DEFAULT_DATE_DS}"
@@ -482,7 +490,6 @@ class TestHiveMetastoreHook:
         )
 
     def test_get_table(self):
-
         self.hook.metastore.__enter__().get_table = mock.MagicMock()
         self.hook.get_table(db=self.database, table_name=self.table)
         self.hook.metastore.__enter__().get_table.assert_called_with(
@@ -583,6 +590,7 @@ class TestHiveMetastoreHook:
         assert metastore_mock.drop_partition(self.table, db=self.database, part_vals=[DEFAULT_DATE_DS]), ret
 
 
+@pytest.mark.db_test
 class TestHiveServer2Hook:
     def _upload_dataframe(self):
         df = pd.DataFrame({"a": [1, 2], "b": [1, 2]})
@@ -640,6 +648,37 @@ class TestHiveServer2Hook:
                 password="conn_pass",
                 database="default",
             )
+
+    @pytest.mark.parametrize(
+        "host, port, schema, message",
+        [
+            ("localhost", "10000", "default", None),
+            ("localhost:", "10000", "default", "The host used in beeline command"),
+            (";ocalhost", "10000", "default", "The host used in beeline command"),
+            (";ocalho/", "10000", "default", "The host used in beeline command"),
+            ("localhost", "as", "default", "The port used in beeline command"),
+            ("localhost", "0;", "default", "The port used in beeline command"),
+            ("localhost", "10/", "default", "The port used in beeline command"),
+            ("localhost", ":", "default", "The port used in beeline command"),
+            ("localhost", "-1", "default", "The port used in beeline command"),
+            ("localhost", "655536", "default", "The port used in beeline command"),
+            ("localhost", "1234", "default;", "The schema used in beeline command"),
+        ],
+    )
+    def test_get_conn_with_wrong_connection_parameters(self, host, port, schema, message):
+        connection = Connection(
+            conn_id="test",
+            conn_type="hive",
+            host=host,
+            port=port,
+            schema=schema,
+        )
+        hook = HiveCliHook()
+        if message:
+            with pytest.raises(Exception, match=message):
+                hook._validate_beeline_parameters(connection)
+        else:
+            hook._validate_beeline_parameters(connection)
 
     def test_get_records(self):
         hook = MockHiveServer2Hook()
@@ -834,20 +873,40 @@ class TestHiveServer2Hook:
         assert "test_dag_run_id" in output
 
 
+@pytest.mark.db_test
 @mock.patch.dict("os.environ", AIRFLOW__CORE__SECURITY="kerberos")
 class TestHiveCli:
     def setup_method(self):
         self.nondefault_schema = "nondefault"
 
-    def test_get_proxy_user_value(self):
+    @pytest.mark.parametrize(
+        "extra_dejson, correct_proxy_user, proxy_user",
+        [
+            ({"proxy_user": "a_user_proxy"}, "hive.server2.proxy.user=a_user_proxy", None),
+        ],
+    )
+    def test_get_proxy_user_value(self, extra_dejson, correct_proxy_user, proxy_user):
         hook = MockHiveCliHook()
         returner = mock.MagicMock()
-        returner.extra_dejson = {"proxy_user": "a_user_proxy"}
+        returner.extra_dejson = extra_dejson
+        returner.login = "admin"
         hook.use_beeline = True
         hook.conn = returner
+        hook.proxy_user = proxy_user
 
         # Run
         result = hook._prepare_cli_cmd()
 
         # Verify
-        assert "hive.server2.proxy.user=a_user_proxy" in result[2]
+        assert correct_proxy_user in result[2]
+
+    def test_get_wrong_principal(self):
+        hook = MockHiveCliHook()
+        returner = mock.MagicMock()
+        returner.extra_dejson = {"principal": "principal with ; semicolon"}
+        hook.use_beeline = True
+        hook.conn = returner
+
+        # Run
+        with pytest.raises(RuntimeError, match="The principal should not contain the ';' character"):
+            hook._prepare_cli_cmd()

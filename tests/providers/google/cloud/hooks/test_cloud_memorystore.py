@@ -17,7 +17,7 @@
 # under the License.
 from __future__ import annotations
 
-from unittest import TestCase, mock
+from unittest import mock
 from unittest.mock import PropertyMock
 
 import pytest
@@ -39,7 +39,6 @@ from tests.providers.google.cloud.utils.base_gcp_mock import (
 )
 
 TEST_GCP_CONN_ID = "test-gcp-conn-id"
-TEST_DELEGATE_TO = "test-delegate-to"
 TEST_LOCATION = "test-location"
 TEST_INSTANCE_ID = "test-instance-id"
 TEST_PROJECT_ID = "test-project-id"
@@ -57,8 +56,12 @@ TEST_NAME_DEFAULT_PROJECT_ID = (
 )
 
 
-class TestCloudMemorystoreWithDefaultProjectIdHook(TestCase):
-    def setUp(self):
+class TestCloudMemorystoreWithDefaultProjectIdHook:
+    def test_delegate_to_runtime_error(self):
+        with pytest.raises(RuntimeError):
+            CloudMemorystoreHook(gcp_conn_id="test", delegate_to="delegate_to")
+
+    def setup_method(self):
         with mock.patch(
             "airflow.providers.google.cloud.hooks.cloud_memorystore.CloudMemorystoreHook.__init__",
             new=mock_base_gcp_hook_default_project_id,
@@ -227,8 +230,8 @@ class TestCloudMemorystoreWithDefaultProjectIdHook(TestCase):
         )
 
 
-class TestCloudMemorystoreWithoutDefaultProjectIdHook(TestCase):
-    def setUp(self):
+class TestCloudMemorystoreWithoutDefaultProjectIdHook:
+    def setup_method(self):
         with mock.patch(
             "airflow.providers.google.cloud.hooks.cloud_memorystore.CloudMemorystoreHook.__init__",
             new=mock_base_gcp_hook_no_default_project_id,
@@ -455,8 +458,8 @@ class TestCloudMemorystoreWithoutDefaultProjectIdHook(TestCase):
             )
 
 
-class TestCloudMemorystoreMemcachedWithDefaultProjectIdHook(TestCase):
-    def setUp(self):
+class TestCloudMemorystoreMemcachedWithDefaultProjectIdHook:
+    def setup_method(self):
         with mock.patch(
             "airflow.providers.google.cloud.hooks.cloud_memorystore.CloudMemorystoreMemcachedHook.__init__",
             new=mock_base_gcp_hook_default_project_id,

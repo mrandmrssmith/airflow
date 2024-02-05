@@ -81,7 +81,6 @@ KUBERNETES_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
                 "--run-in-parallel",
                 "--parallelism",
                 "--python-versions",
-                "--kubernetes-versions",
                 "--skip-cleanup",
                 "--debug-resources",
                 "--include-success-outputs",
@@ -115,7 +114,6 @@ KUBERNETES_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
             "options": [
                 "--python",
                 "--kubernetes-version",
-                "--image-tag",
             ],
         },
         {
@@ -161,6 +159,8 @@ KUBERNETES_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
                 "--executor",
                 "--upgrade",
                 "--wait-time-in-seconds",
+                "--use-standard-naming",
+                "--multi-namespace-mode",
             ],
         },
         {
@@ -217,8 +217,6 @@ KUBERNETES_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
             "name": "K8S cluster creation flags",
             "options": [
                 "--force-recreate-cluster",
-                "--forwarded-port-number",
-                "--api-server-port",
             ],
         },
         {
@@ -226,6 +224,7 @@ KUBERNETES_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
             "options": [
                 "--upgrade",
                 "--wait-time-in-seconds",
+                "--use-standard-naming",
             ],
         },
         {

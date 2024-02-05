@@ -15,40 +15,33 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""This module contains Google Vertex AI operators.
 
-.. spelling::
+"""This module contains Google Vertex AI operators."""
 
-    undeployed
-    undeploy
-    Undeploys
-    aiplatform
-    FieldMask
-    unassigns
-"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Sequence
 
 from google.api_core.exceptions import NotFound
 from google.api_core.gapic_v1.method import DEFAULT, _MethodDefault
-from google.api_core.retry import Retry
 from google.cloud.aiplatform_v1.types import DeployedModel, Endpoint, endpoint_service
-from google.protobuf.field_mask_pb2 import FieldMask
 
-from airflow.models import BaseOperator
 from airflow.providers.google.cloud.hooks.vertex_ai.endpoint_service import EndpointServiceHook
 from airflow.providers.google.cloud.links.vertex_ai import (
     VertexAIEndpointLink,
     VertexAIEndpointListLink,
     VertexAIModelLink,
 )
+from airflow.providers.google.cloud.operators.cloud_base import GoogleCloudBaseOperator
 
 if TYPE_CHECKING:
+    from google.api_core.retry import Retry
+    from google.protobuf.field_mask_pb2 import FieldMask
+
     from airflow.utils.context import Context
 
 
-class CreateEndpointOperator(BaseOperator):
+class CreateEndpointOperator(GoogleCloudBaseOperator):
     """
     Creates an Endpoint.
 
@@ -61,9 +54,6 @@ class CreateEndpointOperator(BaseOperator):
     :param timeout: The timeout for this request.
     :param metadata: Strings which should be sent along with the request as metadata.
     :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -88,7 +78,6 @@ class CreateEndpointOperator(BaseOperator):
         timeout: float | None = None,
         metadata: Sequence[tuple[str, str]] = (),
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         **kwargs,
     ) -> None:
@@ -101,13 +90,11 @@ class CreateEndpointOperator(BaseOperator):
         self.timeout = timeout
         self.metadata = metadata
         self.gcp_conn_id = gcp_conn_id
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
 
     def execute(self, context: Context):
         hook = EndpointServiceHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
 
@@ -132,7 +119,7 @@ class CreateEndpointOperator(BaseOperator):
         return endpoint
 
 
-class DeleteEndpointOperator(BaseOperator):
+class DeleteEndpointOperator(GoogleCloudBaseOperator):
     """
     Deletes an Endpoint.
 
@@ -143,9 +130,6 @@ class DeleteEndpointOperator(BaseOperator):
     :param timeout: The timeout for this request.
     :param metadata: Strings which should be sent along with the request as metadata.
     :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -168,7 +152,6 @@ class DeleteEndpointOperator(BaseOperator):
         timeout: float | None = None,
         metadata: Sequence[tuple[str, str]] = (),
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         **kwargs,
     ) -> None:
@@ -180,13 +163,11 @@ class DeleteEndpointOperator(BaseOperator):
         self.timeout = timeout
         self.metadata = metadata
         self.gcp_conn_id = gcp_conn_id
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
 
     def execute(self, context: Context):
         hook = EndpointServiceHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
 
@@ -206,7 +187,7 @@ class DeleteEndpointOperator(BaseOperator):
             self.log.info("The Endpoint ID %s does not exist.", self.endpoint_id)
 
 
-class DeployModelOperator(BaseOperator):
+class DeployModelOperator(GoogleCloudBaseOperator):
     """
     Deploys a Model into this Endpoint, creating a DeployedModel within it.
 
@@ -233,9 +214,6 @@ class DeployModelOperator(BaseOperator):
     :param timeout: The timeout for this request.
     :param metadata: Strings which should be sent along with the request as metadata.
     :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -261,7 +239,6 @@ class DeployModelOperator(BaseOperator):
         timeout: float | None = None,
         metadata: Sequence[tuple[str, str]] = (),
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         **kwargs,
     ) -> None:
@@ -275,13 +252,11 @@ class DeployModelOperator(BaseOperator):
         self.timeout = timeout
         self.metadata = metadata
         self.gcp_conn_id = gcp_conn_id
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
 
     def execute(self, context: Context):
         hook = EndpointServiceHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
 
@@ -307,7 +282,7 @@ class DeployModelOperator(BaseOperator):
         return deploy_model
 
 
-class GetEndpointOperator(BaseOperator):
+class GetEndpointOperator(GoogleCloudBaseOperator):
     """
     Gets an Endpoint.
 
@@ -318,9 +293,6 @@ class GetEndpointOperator(BaseOperator):
     :param timeout: The timeout for this request.
     :param metadata: Strings which should be sent along with the request as metadata.
     :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -344,7 +316,6 @@ class GetEndpointOperator(BaseOperator):
         timeout: float | None = None,
         metadata: Sequence[tuple[str, str]] = (),
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         **kwargs,
     ) -> None:
@@ -356,13 +327,11 @@ class GetEndpointOperator(BaseOperator):
         self.timeout = timeout
         self.metadata = metadata
         self.gcp_conn_id = gcp_conn_id
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
 
     def execute(self, context: Context):
         hook = EndpointServiceHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
 
@@ -383,7 +352,7 @@ class GetEndpointOperator(BaseOperator):
             self.log.info("The Endpoint ID %s does not exist.", self.endpoint_id)
 
 
-class ListEndpointsOperator(BaseOperator):
+class ListEndpointsOperator(GoogleCloudBaseOperator):
     """
     Lists Endpoints in a Location.
 
@@ -415,9 +384,6 @@ class ListEndpointsOperator(BaseOperator):
     :param timeout: The timeout for this request.
     :param metadata: Strings which should be sent along with the request as metadata.
     :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -445,7 +411,6 @@ class ListEndpointsOperator(BaseOperator):
         timeout: float | None = None,
         metadata: Sequence[tuple[str, str]] = (),
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         **kwargs,
     ) -> None:
@@ -461,13 +426,11 @@ class ListEndpointsOperator(BaseOperator):
         self.timeout = timeout
         self.metadata = metadata
         self.gcp_conn_id = gcp_conn_id
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
 
     def execute(self, context: Context):
         hook = EndpointServiceHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
         results = hook.list_endpoints(
@@ -486,15 +449,13 @@ class ListEndpointsOperator(BaseOperator):
         return [Endpoint.to_dict(result) for result in results]
 
 
-class UndeployModelOperator(BaseOperator):
+class UndeployModelOperator(GoogleCloudBaseOperator):
     """
-    Undeploys a Model from an Endpoint, removing a DeployedModel from it, and freeing all resources it's
-    using.
+    Undeploys a Model from an Endpoint, removing a DeployedModel from it, and freeing all used resources.
 
     :param project_id: Required. The ID of the Google Cloud project that the service belongs to.
     :param region: Required. The ID of the Google Cloud region that the service belongs to.
-    :param endpoint_id:  Required. The name of the Endpoint resource from which to undeploy a Model. Format:
-        ``projects/{project}/locations/{location}/endpoints/{endpoint}``
+    :param endpoint_id:  Required. The ID of the Endpoint resource from which to undeploy a Model.
     :param deployed_model_id:  Required. The ID of the DeployedModel to be undeployed from the Endpoint.
     :param traffic_split: If this field is provided, then the Endpoint's
         [traffic_split][google.cloud.aiplatform.v1.Endpoint.traffic_split] will be overwritten with it. If
@@ -506,9 +467,6 @@ class UndeployModelOperator(BaseOperator):
     :param timeout: The timeout for this request.
     :param metadata: Strings which should be sent along with the request as metadata.
     :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -533,7 +491,6 @@ class UndeployModelOperator(BaseOperator):
         timeout: float | None = None,
         metadata: Sequence[tuple[str, str]] = (),
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         **kwargs,
     ) -> None:
@@ -547,13 +504,11 @@ class UndeployModelOperator(BaseOperator):
         self.timeout = timeout
         self.metadata = metadata
         self.gcp_conn_id = gcp_conn_id
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
 
     def execute(self, context: Context):
         hook = EndpointServiceHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
 
@@ -572,7 +527,7 @@ class UndeployModelOperator(BaseOperator):
         self.log.info("DeployedModel was removed successfully")
 
 
-class UpdateEndpointOperator(BaseOperator):
+class UpdateEndpointOperator(GoogleCloudBaseOperator):
     """
     Updates an Endpoint.
 
@@ -586,9 +541,6 @@ class UpdateEndpointOperator(BaseOperator):
     :param timeout: The timeout for this request.
     :param metadata: Strings which should be sent along with the request as metadata.
     :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -614,7 +566,6 @@ class UpdateEndpointOperator(BaseOperator):
         timeout: float | None = None,
         metadata: Sequence[tuple[str, str]] = (),
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         **kwargs,
     ) -> None:
@@ -628,13 +579,11 @@ class UpdateEndpointOperator(BaseOperator):
         self.timeout = timeout
         self.metadata = metadata
         self.gcp_conn_id = gcp_conn_id
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
 
     def execute(self, context: Context):
         hook = EndpointServiceHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
         self.log.info("Updating endpoint: %s", self.endpoint_id)

@@ -19,9 +19,16 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
-from airflow import models
+import pytest
+
+from airflow.models.dag import DAG
 from airflow.providers.google.cloud.operators.gcs import GCSCreateBucketOperator, GCSDeleteBucketOperator
-from airflow.providers.google.cloud.transfers.mssql_to_gcs import MSSQLToGCSOperator
+
+try:
+    from airflow.providers.google.cloud.transfers.mssql_to_gcs import MSSQLToGCSOperator
+except ImportError:
+    pytest.skip("MSSQL not available", allow_module_level=True)
+
 from airflow.utils.trigger_rule import TriggerRule
 
 ENV_ID = os.environ.get("SYSTEM_TESTS_ENV_ID")
@@ -34,7 +41,7 @@ FILENAME = "test_file"
 
 SQL_QUERY = "USE airflow SELECT * FROM Country;"
 
-with models.DAG(
+with DAG(
     DAG_ID,
     schedule="@once",
     start_date=datetime(2021, 1, 1),

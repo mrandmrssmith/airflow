@@ -28,7 +28,12 @@ QuickSight Super-fast, Parallel, In-Memory, Calculation Engine (SPICE).
 Prerequisite Tasks
 ------------------
 
-.. include:: _partials/prerequisite_tasks.rst
+.. include:: ../_partials/prerequisite_tasks.rst
+
+Generic Parameters
+------------------
+
+.. include:: ../_partials/generic_parameters.rst
 
 Operators
 ---------

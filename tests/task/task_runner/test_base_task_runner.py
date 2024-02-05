@@ -21,9 +21,12 @@ from unittest import mock
 
 import pytest
 
-from airflow.jobs.local_task_job import LocalTaskJob
+from airflow.jobs.job import Job
+from airflow.jobs.local_task_job_runner import LocalTaskJobRunner
 from airflow.models.baseoperator import BaseOperator
 from airflow.task.task_runner.base_task_runner import BaseTaskRunner
+
+pytestmark = pytest.mark.db_test
 
 
 @pytest.mark.parametrize(["impersonation"], (("nobody",), (None,)))
@@ -38,8 +41,9 @@ def test_config_copy_mode(tmp_configuration_copy, subprocess_call, dag_maker, im
     dr = dag_maker.create_dagrun()
 
     ti = dr.task_instances[0]
-    job = LocalTaskJob(ti)
-    runner = BaseTaskRunner(job)
+    job = Job(dag_id=ti.dag_id)
+    job_runner = LocalTaskJobRunner(job=job, task_instance=ti)
+    runner = BaseTaskRunner(job_runner)
     # So we don't try to delete it -- cos the file won't exist
     del runner._cfg_path
 

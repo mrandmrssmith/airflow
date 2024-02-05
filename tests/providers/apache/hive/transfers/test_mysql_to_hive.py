@@ -17,17 +17,21 @@
 # under the License.
 from __future__ import annotations
 
+import csv
 import textwrap
-from collections import OrderedDict
 from contextlib import closing
 from unittest import mock
 
 import pytest
 
 from airflow.providers.apache.hive.hooks.hive import HiveCliHook
-from airflow.providers.apache.hive.transfers.mysql_to_hive import MySqlToHiveOperator
-from airflow.providers.mysql.hooks.mysql import MySqlHook
 from airflow.utils import timezone
+
+try:
+    from airflow.providers.apache.hive.transfers.mysql_to_hive import MySqlToHiveOperator
+    from airflow.providers.mysql.hooks.mysql import MySqlHook
+except ImportError:
+    pytest.skip("MysQL and/or hive not available", allow_module_level=True)
 
 DEFAULT_DATE = timezone.datetime(2015, 1, 1)
 DEFAULT_DATE_ISO = DEFAULT_DATE.isoformat()
@@ -183,7 +187,6 @@ class TestTransfer:
     )
     @pytest.mark.usefixtures("baby_names_table")
     def test_mysql_to_hive(self, spy_on_hive, params, expected, csv):
-
         sql = "SELECT * FROM baby_names LIMIT 1000;"
         op = MySqlToHiveOperator(
             task_id="test_m2h",
@@ -229,21 +232,21 @@ class TestTransfer:
             op.execute({})
 
             assert spy_on_hive.load_file.call_count == 1
-            ordered_dict = OrderedDict()
-            ordered_dict["c0"] = "SMALLINT"
-            ordered_dict["c1"] = "INT"
-            ordered_dict["c2"] = "INT"
-            ordered_dict["c3"] = "BIGINT"
-            ordered_dict["c4"] = "DECIMAL(38,0)"
-            ordered_dict["c5"] = "TIMESTAMP"
-            assert spy_on_hive.load_file.call_args[1]["field_dict"] == ordered_dict
+            ordered_dict = {
+                "c0": "SMALLINT",
+                "c1": "INT",
+                "c2": "INT",
+                "c3": "BIGINT",
+                "c4": "DECIMAL(38,0)",
+                "c5": "TIMESTAMP",
+            }
+            assert spy_on_hive.load_file.call_args.kwargs["field_dict"] == ordered_dict
         finally:
             with closing(hook.get_conn()) as conn:
                 with closing(conn.cursor()) as cursor:
                     cursor.execute(f"DROP TABLE IF EXISTS {mysql_table}")
 
     def test_mysql_to_hive_verify_csv_special_char(self, spy_on_hive):
-
         mysql_table = "test_mysql_to_hive"
         hive_table = "test_mysql_to_hive"
 
@@ -267,13 +270,9 @@ class TestTransfer:
                         INSERT INTO {} VALUES (
                             '{}', '{}'
                         )
-                    """.format(
-                            mysql_table, *db_record
-                        )
+                    """.format(mysql_table, *db_record)
                     )
                     conn.commit()
-
-            import unicodecsv as csv
 
             op = MySqlToHiveOperator(
                 task_id="test_m2h",

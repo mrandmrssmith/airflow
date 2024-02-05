@@ -18,26 +18,59 @@
 from __future__ import annotations
 
 import json
-import unittest
+import os
+import platform
+import tempfile
 from unittest import mock
 from unittest.mock import PropertyMock
 
+import aiohttp
 import httplib2
 import pytest
+from aiohttp.helpers import TimerNoop
 from googleapiclient.errors import HttpError
-from parameterized import parameterized
+from yarl import URL
 
 from airflow.exceptions import AirflowException
 from airflow.models import Connection
-from airflow.providers.google.cloud.hooks.cloud_sql import CloudSQLDatabaseHook, CloudSQLHook
+from airflow.providers.google.cloud.hooks.cloud_sql import (
+    CloudSQLAsyncHook,
+    CloudSQLDatabaseHook,
+    CloudSQLHook,
+    CloudSqlProxyRunner,
+)
 from tests.providers.google.cloud.utils.base_gcp_mock import (
     mock_base_gcp_hook_default_project_id,
     mock_base_gcp_hook_no_default_project_id,
 )
 
+HOOK_STR = "airflow.providers.google.cloud.hooks.cloud_sql.{}"
+PROJECT_ID = "test_project_id"
+OPERATION_NAME = "test_operation_name"
+OPERATION_URL = (
+    f"https://sqladmin.googleapis.com/sql/v1beta4/projects/{PROJECT_ID}/operations/{OPERATION_NAME}"
+)
 
-class TestGcpSqlHookDefaultProjectId(unittest.TestCase):
-    def setUp(self):
+
+@pytest.fixture
+def hook_async():
+    with mock.patch(
+        "airflow.providers.google.common.hooks.base_google.GoogleBaseAsyncHook.__init__",
+        new=mock_base_gcp_hook_default_project_id,
+    ):
+        yield CloudSQLAsyncHook()
+
+
+def session():
+    return mock.Mock()
+
+
+class TestGcpSqlHookDefaultProjectId:
+    def test_delegate_to_runtime_error(self):
+        with pytest.raises(RuntimeError):
+            CloudSQLHook(api_version="v1", gcp_conn_id="test", delegate_to="delegate_to")
+
+    def setup_method(self):
         with mock.patch(
             "airflow.providers.google.common.hooks.base_google.GoogleBaseHook.__init__",
             new=mock_base_gcp_hook_default_project_id,
@@ -107,9 +140,6 @@ class TestGcpSqlHookDefaultProjectId(unittest.TestCase):
 
         export_method.assert_called_once_with(body={}, instance="instance", project="example-project")
         execute_method.assert_called_once_with(num_retries=5)
-        wait_for_operation_to_complete.assert_called_once_with(
-            project_id="example-project", operation_name="operation_id"
-        )
         assert 1 == mock_get_credentials.call_count
 
     @mock.patch("airflow.providers.google.cloud.hooks.cloud_sql.CloudSQLHook.get_conn")
@@ -119,25 +149,14 @@ class TestGcpSqlHookDefaultProjectId(unittest.TestCase):
         execute_method = export_method.return_value.execute
         execute_method.side_effect = [
             HttpError(
-                resp=type(
-                    "",
-                    (object,),
-                    {
-                        "status": 429,
-                    },
-                )(),
+                resp=httplib2.Response({"status": 429}),
                 content=b"Internal Server Error",
             ),
             {"name": "operation_id"},
         ]
-        wait_for_operation_to_complete.return_value = None
-        self.cloudsql_hook.export_instance(project_id="example-project", instance="instance", body={})
-
-        assert 2 == export_method.call_count
-        assert 2 == execute_method.call_count
-        wait_for_operation_to_complete.assert_called_once_with(
-            project_id="example-project", operation_name="operation_id"
-        )
+        with pytest.raises(HttpError):
+            self.cloudsql_hook.export_instance(project_id="example-project", instance="instance", body={})
+        wait_for_operation_to_complete.assert_not_called()
 
     @mock.patch(
         "airflow.providers.google.cloud.hooks.cloud_sql.CloudSQLHook.get_credentials_and_project_id",
@@ -191,13 +210,7 @@ class TestGcpSqlHookDefaultProjectId(unittest.TestCase):
         execute_method = insert_method.return_value.execute
         execute_method.side_effect = [
             HttpError(
-                resp=type(
-                    "",
-                    (object,),
-                    {
-                        "status": 429,
-                    },
-                )(),
+                resp=httplib2.Response({"status": 429}),
                 content=b"Internal Server Error",
             ),
             {"name": "operation_id"},
@@ -225,13 +238,7 @@ class TestGcpSqlHookDefaultProjectId(unittest.TestCase):
         execute_method = patch_method.return_value.execute
         execute_method.side_effect = [
             HttpError(
-                resp=type(
-                    "",
-                    (object,),
-                    {
-                        "status": 429,
-                    },
-                )(),
+                resp=httplib2.Response({"status": 429}),
                 content=b"Internal Server Error",
             ),
             {"name": "operation_id"},
@@ -282,7 +289,7 @@ class TestGcpSqlHookDefaultProjectId(unittest.TestCase):
         delete_method.assert_called_once_with(instance="instance", project="example-project")
         execute_method.assert_called_once_with(num_retries=5)
         wait_for_operation_to_complete.assert_called_once_with(
-            operation_name="operation_id", project_id="example-project"
+            operation_name="operation_id", project_id="example-project", time_to_sleep=5
         )
         assert 1 == mock_get_credentials.call_count
 
@@ -299,13 +306,7 @@ class TestGcpSqlHookDefaultProjectId(unittest.TestCase):
         execute_method = delete_method.return_value.execute
         execute_method.side_effect = [
             HttpError(
-                resp=type(
-                    "",
-                    (object,),
-                    {
-                        "status": 429,
-                    },
-                )(),
+                resp=httplib2.Response({"status": 429}),
                 content=b"Internal Server Error",
             ),
             {"name": "operation_id"},
@@ -317,8 +318,34 @@ class TestGcpSqlHookDefaultProjectId(unittest.TestCase):
         assert 2 == delete_method.call_count
         assert 2 == execute_method.call_count
         wait_for_operation_to_complete.assert_called_once_with(
+            operation_name="operation_id", project_id="example-project", time_to_sleep=5
+        )
+
+    @mock.patch(
+        "airflow.providers.google.cloud.hooks.cloud_sql.CloudSQLHook.get_credentials_and_project_id",
+        return_value=(mock.MagicMock(), "example-project"),
+    )
+    @mock.patch("airflow.providers.google.cloud.hooks.cloud_sql.CloudSQLHook.get_conn")
+    @mock.patch("airflow.providers.google.cloud.hooks.cloud_sql.CloudSQLHook._wait_for_operation_to_complete")
+    def test_instance_clone(self, wait_for_operation_to_complete, get_conn, mock_get_credentials):
+        clone_method = get_conn.return_value.instances.return_value.clone
+        execute_method = clone_method.return_value.execute
+        execute_method.return_value = {"name": "operation_id"}
+        wait_for_operation_to_complete.return_value = None
+        body = {
+            "cloneContext": {
+                "kind": "sql#cloneContext",
+                "destinationInstanceName": "clonedInstance",
+            }
+        }
+        self.cloudsql_hook.clone_instance(instance="instance", body=body)
+
+        clone_method.assert_called_once_with(instance="instance", project="example-project", body=body)
+        execute_method.assert_called_once_with(num_retries=5)
+        wait_for_operation_to_complete.assert_called_once_with(
             operation_name="operation_id", project_id="example-project"
         )
+        assert 1 == mock_get_credentials.call_count
 
     @mock.patch(
         "airflow.providers.google.cloud.hooks.cloud_sql.CloudSQLHook.get_credentials_and_project_id",
@@ -374,13 +401,7 @@ class TestGcpSqlHookDefaultProjectId(unittest.TestCase):
         execute_method = insert_method.return_value.execute
         execute_method.side_effect = [
             HttpError(
-                resp=type(
-                    "",
-                    (object,),
-                    {
-                        "status": 429,
-                    },
-                )(),
+                resp=httplib2.Response({"status": 429}),
                 content=b"Internal Server Error",
             ),
             {"name": "operation_id"},
@@ -430,13 +451,7 @@ class TestGcpSqlHookDefaultProjectId(unittest.TestCase):
         execute_method = patch_method.return_value.execute
         execute_method.side_effect = [
             HttpError(
-                resp=type(
-                    "",
-                    (object,),
-                    {
-                        "status": 429,
-                    },
-                )(),
+                resp=httplib2.Response({"status": 429}),
                 content=b"Internal Server Error",
             ),
             {"name": "operation_id"},
@@ -486,13 +501,7 @@ class TestGcpSqlHookDefaultProjectId(unittest.TestCase):
         execute_method = delete_method.return_value.execute
         execute_method.side_effect = [
             HttpError(
-                resp=type(
-                    "",
-                    (object,),
-                    {
-                        "status": 429,
-                    },
-                )(),
+                resp=httplib2.Response({"status": 429}),
                 content=b"Internal Server Error",
             ),
             {"name": "operation_id"},
@@ -508,8 +517,8 @@ class TestGcpSqlHookDefaultProjectId(unittest.TestCase):
         )
 
 
-class TestGcpSqlHookNoDefaultProjectID(unittest.TestCase):
-    def setUp(self):
+class TestGcpSqlHookNoDefaultProjectID:
+    def setup_method(self):
         with mock.patch(
             "airflow.providers.google.common.hooks.base_google.GoogleBaseHook.__init__",
             new=mock_base_gcp_hook_no_default_project_id,
@@ -558,9 +567,6 @@ class TestGcpSqlHookNoDefaultProjectID(unittest.TestCase):
         )
         export_method.assert_called_once_with(body={}, instance="instance", project="example-project")
         execute_method.assert_called_once_with(num_retries=5)
-        wait_for_operation_to_complete.assert_called_once_with(
-            project_id="example-project", operation_name="operation_id"
-        )
 
     @mock.patch(
         "airflow.providers.google.common.hooks.base_google.GoogleBaseHook.project_id",
@@ -649,7 +655,7 @@ class TestGcpSqlHookNoDefaultProjectID(unittest.TestCase):
         delete_method.assert_called_once_with(instance="instance", project="example-project")
         execute_method.assert_called_once_with(num_retries=5)
         wait_for_operation_to_complete.assert_called_once_with(
-            operation_name="operation_id", project_id="example-project"
+            operation_name="operation_id", project_id="example-project", time_to_sleep=5
         )
 
     @mock.patch(
@@ -751,7 +757,7 @@ class TestGcpSqlHookNoDefaultProjectID(unittest.TestCase):
         )
 
 
-class TestCloudSqlDatabaseHook(unittest.TestCase):
+class TestCloudSqlDatabaseHook:
     @mock.patch("airflow.providers.google.cloud.hooks.cloud_sql.CloudSQLDatabaseHook.get_connection")
     def test_cloudsql_database_hook_validate_ssl_certs_no_ssl(self, get_connection):
         connection = Connection()
@@ -764,21 +770,22 @@ class TestCloudSqlDatabaseHook(unittest.TestCase):
         )
         hook.validate_ssl_certs()
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "cert_dict",
         [
-            [{}],
-            [{"sslcert": "cert_file.pem"}],
-            [{"sslkey": "cert_key.pem"}],
-            [{"sslrootcert": "root_cert_file.pem"}],
-            [{"sslcert": "cert_file.pem", "sslkey": "cert_key.pem"}],
-            [{"sslrootcert": "root_cert_file.pem", "sslkey": "cert_key.pem"}],
-            [{"sslrootcert": "root_cert_file.pem", "sslcert": "cert_file.pem"}],
-        ]
+            {},
+            {"sslcert": "cert_file.pem"},
+            {"sslkey": "cert_key.pem"},
+            {"sslrootcert": "root_cert_file.pem"},
+            {"sslcert": "cert_file.pem", "sslkey": "cert_key.pem"},
+            {"sslrootcert": "root_cert_file.pem", "sslkey": "cert_key.pem"},
+            {"sslrootcert": "root_cert_file.pem", "sslcert": "cert_file.pem"},
+        ],
     )
     @mock.patch("os.path.isfile")
     @mock.patch("airflow.providers.google.cloud.hooks.cloud_sql.CloudSQLDatabaseHook.get_connection")
     def test_cloudsql_database_hook_validate_ssl_certs_missing_cert_params(
-        self, cert_dict, get_connection, mock_is_file
+        self, get_connection, mock_is_file, cert_dict
     ):
         mock_is_file.side_effects = True
         connection = Connection()
@@ -848,8 +855,12 @@ class TestCloudSqlDatabaseHook(unittest.TestCase):
         err = ctx.value
         assert "must be a readable file" in str(err)
 
+    @mock.patch("airflow.providers.google.cloud.hooks.cloud_sql.gettempdir")
     @mock.patch("airflow.providers.google.cloud.hooks.cloud_sql.CloudSQLDatabaseHook.get_connection")
-    def test_cloudsql_database_hook_validate_socket_path_length_too_long(self, get_connection):
+    def test_cloudsql_database_hook_validate_socket_path_length_too_long(
+        self, get_connection, gettempdir_mock
+    ):
+        gettempdir_mock.return_value = "/tmp"
         connection = Connection()
         connection.set_extra(
             json.dumps(
@@ -871,8 +882,12 @@ class TestCloudSqlDatabaseHook(unittest.TestCase):
         err = ctx.value
         assert "The UNIX socket path length cannot exceed" in str(err)
 
+    @mock.patch("airflow.providers.google.cloud.hooks.cloud_sql.gettempdir")
     @mock.patch("airflow.providers.google.cloud.hooks.cloud_sql.CloudSQLDatabaseHook.get_connection")
-    def test_cloudsql_database_hook_validate_socket_path_length_not_too_long(self, get_connection):
+    def test_cloudsql_database_hook_validate_socket_path_length_not_too_long(
+        self, get_connection, gettempdir_mock
+    ):
+        gettempdir_mock.return_value = "/tmp"
         connection = Connection()
         connection.set_extra(
             json.dumps(
@@ -891,19 +906,20 @@ class TestCloudSqlDatabaseHook(unittest.TestCase):
         )
         hook.validate_socket_path_length()
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "uri",
         [
-            ["http://:password@host:80/database"],
-            ["http://user:@host:80/database"],
-            ["http://user:password@/database"],
-            ["http://user:password@host:80/"],
-            ["http://user:password@/"],
-            ["http://host:80/database"],
-            ["http://host:80/"],
-        ]
+            "http://:password@host:80/database",
+            "http://user:@host:80/database",
+            "http://user:password@/database",
+            "http://user:password@host:80/",
+            "http://user:password@/",
+            "http://host:80/database",
+            "http://host:80/",
+        ],
     )
     @mock.patch("airflow.providers.google.cloud.hooks.cloud_sql.CloudSQLDatabaseHook.get_connection")
-    def test_cloudsql_database_hook_create_connection_missing_fields(self, uri, get_connection):
+    def test_cloudsql_database_hook_create_connection_missing_fields(self, get_connection, uri):
         connection = Connection(uri=uri)
         params = {
             "location": "test",
@@ -986,11 +1002,9 @@ class TestCloudSqlDatabaseHook(unittest.TestCase):
         assert db_hook is not None
 
 
-class TestCloudSqlDatabaseQueryHook(unittest.TestCase):
+class TestCloudSqlDatabaseQueryHook:
     @mock.patch("airflow.providers.google.cloud.hooks.cloud_sql.CloudSQLDatabaseHook.get_connection")
-    def setUp(self, m):
-        super().setUp()
-
+    def setup_method(self, method, mock_get_conn):
         self.sql_connection = Connection(
             conn_id="my_gcp_sql_connection",
             conn_type="gcpcloudsql",
@@ -1022,7 +1036,7 @@ class TestCloudSqlDatabaseQueryHook(unittest.TestCase):
         conn_extra_json = json.dumps(conn_extra)
         self.connection.set_extra(conn_extra_json)
 
-        m.side_effect = [self.sql_connection, self.connection]
+        mock_get_conn.side_effect = [self.sql_connection, self.connection]
         self.db_hook = CloudSQLDatabaseHook(
             gcp_cloudsql_conn_id="my_gcp_sql_connection", gcp_conn_id="my_gcp_connection"
         )
@@ -1095,7 +1109,7 @@ class TestCloudSqlDatabaseQueryHook(unittest.TestCase):
         hook = CloudSQLDatabaseHook()
         connection = hook.create_connection()
         assert "postgres" == connection.conn_type
-        assert "/tmp" in connection.host
+        assert tempfile.gettempdir() in connection.host
         assert "example-project:europe-west1:testdb" in connection.host
         assert connection.port is None
         assert "testdb" == connection.schema
@@ -1168,7 +1182,7 @@ class TestCloudSqlDatabaseQueryHook(unittest.TestCase):
         connection = hook.create_connection()
         assert "mysql" == connection.conn_type
         assert "localhost" == connection.host
-        assert "/tmp" in connection.extra_dejson["unix_socket"]
+        assert tempfile.gettempdir() in connection.extra_dejson["unix_socket"]
         assert "example-project:europe-west1:testdb" in connection.extra_dejson["unix_socket"]
         assert connection.port is None
         assert "testdb" == connection.schema
@@ -1187,3 +1201,125 @@ class TestCloudSqlDatabaseQueryHook(unittest.TestCase):
         assert "127.0.0.1" == connection.host
         assert 3200 != connection.port
         assert "testdb" == connection.schema
+
+
+def get_processor():
+    processor = os.uname().machine
+    if processor == "x86_64":
+        processor = "amd64"
+    return processor
+
+
+class TestCloudSqlProxyRunner:
+    @pytest.mark.parametrize(
+        ["version", "download_url"],
+        [
+            (
+                "v1.23.0",
+                "https://storage.googleapis.com/cloudsql-proxy/v1.23.0/cloud_sql_proxy."
+                f"{platform.system().lower()}.{get_processor()}",
+            ),
+            (
+                "v1.23.0-preview.1",
+                "https://storage.googleapis.com/cloudsql-proxy/v1.23.0-preview.1/cloud_sql_proxy."
+                f"{platform.system().lower()}.{get_processor()}",
+            ),
+        ],
+    )
+    def test_cloud_sql_proxy_runner_version_ok(self, version, download_url):
+        runner = CloudSqlProxyRunner(
+            path_prefix="12345678",
+            instance_specification="project:us-east-1:instance",
+            sql_proxy_version=version,
+        )
+        assert runner._get_sql_proxy_download_url() == download_url
+
+    @pytest.mark.parametrize(
+        "version",
+        [
+            "v1.23.",
+            "v1.23.0..",
+            "v1.23.0\\",
+            "\\",
+        ],
+    )
+    def test_cloud_sql_proxy_runner_version_nok(self, version):
+        runner = CloudSqlProxyRunner(
+            path_prefix="12345678",
+            instance_specification="project:us-east-1:instance",
+            sql_proxy_version=version,
+        )
+        with pytest.raises(ValueError, match="The sql_proxy_version should match the regular expression"):
+            runner._get_sql_proxy_download_url()
+
+
+class TestCloudSQLAsyncHook:
+    @pytest.mark.asyncio
+    @mock.patch(HOOK_STR.format("CloudSQLAsyncHook._get_conn"))
+    async def test_async_get_operation_name_should_execute_successfully(self, mocked_conn, hook_async):
+        await hook_async.get_operation_name(
+            operation_name=OPERATION_NAME,
+            project_id=PROJECT_ID,
+            session=session,
+        )
+
+        mocked_conn.assert_awaited_once_with(url=OPERATION_URL, session=session)
+
+    @pytest.mark.asyncio
+    @mock.patch(HOOK_STR.format("CloudSQLAsyncHook.get_operation_name"))
+    async def test_async_get_operation_completed_should_execute_successfully(self, mocked_get, hook_async):
+        response = aiohttp.ClientResponse(
+            "get",
+            URL(OPERATION_URL),
+            request_info=mock.Mock(),
+            writer=mock.Mock(),
+            continue100=None,
+            timer=TimerNoop(),
+            traces=[],
+            loop=mock.Mock(),
+            session=None,
+        )
+        response.status = 200
+        mocked_get.return_value = response
+        mocked_get.return_value._headers = {"Authorization": "test-token"}
+        mocked_get.return_value._body = b'{"status": "DONE"}'
+
+        operation = await hook_async.get_operation(operation_name=OPERATION_NAME, project_id=PROJECT_ID)
+        mocked_get.assert_awaited_once()
+        assert operation["status"] == "DONE"
+
+    @pytest.mark.asyncio
+    @mock.patch(HOOK_STR.format("CloudSQLAsyncHook.get_operation_name"))
+    async def test_async_get_operation_running_should_execute_successfully(self, mocked_get, hook_async):
+        response = aiohttp.ClientResponse(
+            "get",
+            URL(OPERATION_URL),
+            request_info=mock.Mock(),
+            writer=mock.Mock(),
+            continue100=None,
+            timer=TimerNoop(),
+            traces=[],
+            loop=mock.Mock(),
+            session=None,
+        )
+        response.status = 200
+        mocked_get.return_value = response
+        mocked_get.return_value._headers = {"Authorization": "test-token"}
+        mocked_get.return_value._body = b'{"status": "RUNNING"}'
+
+        operation = await hook_async.get_operation(operation_name=OPERATION_NAME, project_id=PROJECT_ID)
+        mocked_get.assert_awaited_once()
+        assert operation["status"] == "RUNNING"
+
+    @pytest.mark.asyncio
+    @mock.patch(HOOK_STR.format("CloudSQLAsyncHook._get_conn"))
+    async def test_async_get_operation_exception_should_execute_successfully(
+        self, mocked_get_conn, hook_async
+    ):
+        """Assets that the logging is done correctly when CloudSQLAsyncHook raises HttpError"""
+
+        mocked_get_conn.side_effect = HttpError(
+            resp=mock.MagicMock(status=409), content=b"Operation already exists"
+        )
+        with pytest.raises(HttpError):
+            await hook_async.get_operation(operation_name=OPERATION_NAME, project_id=PROJECT_ID)

@@ -18,18 +18,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
-import boto3
-
-from airflow import DAG, settings
+from airflow import settings
 from airflow.decorators import task
 from airflow.models import Connection
 from airflow.models.baseoperator import chain
+from airflow.models.dag import DAG
 from airflow.providers.amazon.aws.hooks.redshift_cluster import RedshiftHook
 from airflow.providers.amazon.aws.operators.redshift_cluster import (
     RedshiftCreateClusterOperator,
     RedshiftDeleteClusterOperator,
 )
-from airflow.providers.amazon.aws.operators.redshift_sql import RedshiftSQLOperator
+from airflow.providers.amazon.aws.operators.redshift_data import RedshiftDataOperator
 from airflow.providers.amazon.aws.operators.s3 import (
     S3CreateBucketOperator,
     S3CreateObjectOperator,
@@ -44,18 +43,21 @@ from tests.system.providers.amazon.aws.utils import ENV_ID_KEY, SystemTestContex
 
 DAG_ID = "example_redshift_to_s3"
 
+# Externally fetched variables:
+SECURITY_GROUP_KEY = "SECURITY_GROUP"
+CLUSTER_SUBNET_GROUP_KEY = "CLUSTER_SUBNET_GROUP"
+
+sys_test_context_task = (
+    SystemTestContextBuilder().add_variable(SECURITY_GROUP_KEY).add_variable(CLUSTER_SUBNET_GROUP_KEY).build()
+)
+
 DB_LOGIN = "adminuser"
 DB_PASS = "MyAmazonPassword1"
 DB_NAME = "dev"
 
-IP_PERMISSION = {
-    "FromPort": -1,
-    "IpProtocol": "All",
-    "IpRanges": [{"CidrIp": "0.0.0.0/0", "Description": "Test description"}],
-}
-
-S3_KEY = "s3_key"
+S3_KEY = "s3_output_"
 S3_KEY_2 = "s3_key_2"
+S3_KEY_PREFIX = "s3_k"
 REDSHIFT_TABLE = "test_table"
 
 SQL_CREATE_TABLE = f"""
@@ -71,9 +73,6 @@ SQL_INSERT_DATA = f"INSERT INTO {REDSHIFT_TABLE} VALUES ( 1, 'Banana', 'Yellow')
 SQL_DROP_TABLE = f"DROP TABLE IF EXISTS {REDSHIFT_TABLE};"
 
 DATA = "0, 'Airflow', 'testing'"
-
-
-sys_test_context_task = SystemTestContextBuilder().build()
 
 
 @task
@@ -94,29 +93,6 @@ def create_connection(conn_id_name: str, cluster_id: str):
     session.commit()
 
 
-@task
-def setup_security_group(sec_group_name: str, ip_permissions: list[dict]):
-    client = boto3.client("ec2")
-    vpc_id = client.describe_vpcs()["Vpcs"][0]["VpcId"]
-    security_group = client.create_security_group(
-        Description="Redshift-system-test", GroupName=sec_group_name, VpcId=vpc_id
-    )
-    client.get_waiter("security_group_exists").wait(
-        GroupIds=[security_group["GroupId"]],
-        GroupNames=[sec_group_name],
-        WaiterConfig={"Delay": 15, "MaxAttempts": 4},
-    )
-    client.authorize_security_group_ingress(
-        GroupId=security_group["GroupId"], GroupName=sec_group_name, IpPermissions=ip_permissions
-    )
-    return security_group["GroupId"]
-
-
-@task(trigger_rule=TriggerRule.ALL_DONE)
-def delete_security_group(sec_group_id: str, sec_group_name: str):
-    boto3.client("ec2").delete_security_group(GroupId=sec_group_id, GroupName=sec_group_name)
-
-
 with DAG(
     dag_id=DAG_ID,
     start_date=datetime(2021, 1, 1),
@@ -126,12 +102,12 @@ with DAG(
 ) as dag:
     test_context = sys_test_context_task()
     env_id = test_context[ENV_ID_KEY]
+    security_group_id = test_context[SECURITY_GROUP_KEY]
+    cluster_subnet_group_name = test_context[CLUSTER_SUBNET_GROUP_KEY]
     redshift_cluster_identifier = f"{env_id}-redshift-cluster"
     conn_id_name = f"{env_id}-conn-id"
     sg_name = f"{env_id}-sg"
     bucket_name = f"{env_id}-bucket"
-
-    set_up_sg = setup_security_group(sec_group_name=sg_name, ip_permissions=[IP_PERMISSION])
 
     create_bucket = S3CreateBucketOperator(
         task_id="s3_create_bucket",
@@ -141,8 +117,9 @@ with DAG(
     create_cluster = RedshiftCreateClusterOperator(
         task_id="create_cluster",
         cluster_identifier=redshift_cluster_identifier,
-        vpc_security_group_ids=[set_up_sg],
-        publicly_accessible=True,
+        vpc_security_group_ids=[security_group_id],
+        cluster_subnet_group_name=cluster_subnet_group_name,
+        publicly_accessible=False,
         cluster_type="single-node",
         node_type="dc2.large",
         master_username=DB_LOGIN,
@@ -154,7 +131,7 @@ with DAG(
         cluster_identifier=redshift_cluster_identifier,
         target_status="available",
         poke_interval=5,
-        timeout=60 * 15,
+        timeout=60 * 30,
     )
 
     set_up_connection = create_connection(conn_id_name, cluster_id=redshift_cluster_identifier)
@@ -167,15 +144,22 @@ with DAG(
         replace=True,
     )
 
-    create_table_redshift_data = RedshiftSQLOperator(
+    create_table_redshift_data = RedshiftDataOperator(
         task_id="create_table_redshift_data",
-        redshift_conn_id=conn_id_name,
+        cluster_identifier=redshift_cluster_identifier,
+        database=DB_NAME,
+        db_user=DB_LOGIN,
         sql=SQL_CREATE_TABLE,
+        wait_for_completion=True,
     )
-    insert_data = RedshiftSQLOperator(
+
+    insert_data = RedshiftDataOperator(
         task_id="insert_data",
-        redshift_conn_id=conn_id_name,
+        cluster_identifier=redshift_cluster_identifier,
+        database=DB_NAME,
+        db_user=DB_LOGIN,
         sql=SQL_INSERT_DATA,
+        wait_for_completion=True,
     )
 
     # [START howto_transfer_redshift_to_s3]
@@ -207,21 +191,31 @@ with DAG(
     )
     # [END howto_transfer_s3_to_redshift]
 
-    drop_table = RedshiftSQLOperator(
-        task_id="drop_table",
+    # [START howto_transfer_s3_to_redshift_multiple_keys]
+    transfer_s3_to_redshift_multiple = S3ToRedshiftOperator(
+        task_id="transfer_s3_to_redshift_multiple",
         redshift_conn_id=conn_id_name,
+        s3_bucket=bucket_name,
+        s3_key=S3_KEY_PREFIX,
+        schema="PUBLIC",
+        table=REDSHIFT_TABLE,
+        copy_options=["csv"],
+    )
+    # [END howto_transfer_s3_to_redshift_multiple_keys]
+
+    drop_table = RedshiftDataOperator(
+        task_id="drop_table",
+        cluster_identifier=redshift_cluster_identifier,
+        database=DB_NAME,
+        db_user=DB_LOGIN,
         sql=SQL_DROP_TABLE,
+        wait_for_completion=True,
         trigger_rule=TriggerRule.ALL_DONE,
     )
     delete_cluster = RedshiftDeleteClusterOperator(
         task_id="delete_cluster",
         cluster_identifier=redshift_cluster_identifier,
         trigger_rule=TriggerRule.ALL_DONE,
-    )
-
-    delete_sg = delete_security_group(
-        sec_group_id=set_up_sg,
-        sec_group_name=sg_name,
     )
 
     delete_bucket = S3DeleteBucketOperator(
@@ -234,7 +228,6 @@ with DAG(
     chain(
         # TEST SETUP
         test_context,
-        set_up_sg,
         create_bucket,
         create_cluster,
         wait_cluster_available,
@@ -246,10 +239,10 @@ with DAG(
         transfer_redshift_to_s3,
         check_if_key_exists,
         transfer_s3_to_redshift,
+        transfer_s3_to_redshift_multiple,
         # TEST TEARDOWN
         drop_table,
         delete_cluster,
-        delete_sg,
         delete_bucket,
     )
 

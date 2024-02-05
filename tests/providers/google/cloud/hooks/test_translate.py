@@ -17,8 +17,9 @@
 # under the License.
 from __future__ import annotations
 
-import unittest
 from unittest import mock
+
+import pytest
 
 from airflow.providers.google.cloud.hooks.translate import CloudTranslateHook
 from airflow.providers.google.common.consts import CLIENT_INFO
@@ -27,8 +28,12 @@ from tests.providers.google.cloud.utils.base_gcp_mock import mock_base_gcp_hook_
 PROJECT_ID_TEST = "project-id"
 
 
-class TestCloudTranslateHook(unittest.TestCase):
-    def setUp(self):
+class TestCloudTranslateHook:
+    def test_delegate_to_runtime_error(self):
+        with pytest.raises(RuntimeError):
+            CloudTranslateHook(gcp_conn_id="GCP_CONN_ID", delegate_to="delegate_to")
+
+    def setup_method(self):
         with mock.patch(
             "airflow.providers.google.cloud.hooks.translate.CloudTranslateHook.__init__",
             new=mock_base_gcp_hook_default_project_id,

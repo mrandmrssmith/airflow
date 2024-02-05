@@ -31,8 +31,7 @@ if TYPE_CHECKING:
 
 class LocalFilesystemToGCSOperator(BaseOperator):
     """
-    Uploads a file or list of files to Google Cloud Storage.
-    Optionally can compress the file for upload.
+    Uploads a file or list of files to Google Cloud Storage; optionally can compress the file for upload.
 
     .. seealso::
         For more information on how to use this operator, take a look at the guide:
@@ -46,7 +45,6 @@ class LocalFilesystemToGCSOperator(BaseOperator):
     :param bucket: The bucket to upload to. (templated)
     :param gcp_conn_id: (Optional) The connection ID used to connect to Google Cloud.
     :param mime_type: The mime-type string
-    :param delegate_to: The account to impersonate, if any
     :param gzip: Allows for file to be compressed and uploaded as gzip
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
@@ -73,7 +71,6 @@ class LocalFilesystemToGCSOperator(BaseOperator):
         bucket,
         gcp_conn_id="google_cloud_default",
         mime_type="application/octet-stream",
-        delegate_to=None,
         gzip=False,
         impersonation_chain: str | Sequence[str] | None = None,
         **kwargs,
@@ -85,15 +82,13 @@ class LocalFilesystemToGCSOperator(BaseOperator):
         self.bucket = bucket
         self.gcp_conn_id = gcp_conn_id
         self.mime_type = mime_type
-        self.delegate_to = delegate_to
         self.gzip = gzip
         self.impersonation_chain = impersonation_chain
 
     def execute(self, context: Context):
-        """Uploads a file or list of files to Google Cloud Storage"""
+        """Uploads a file or list of files to Google Cloud Storage."""
         hook = GCSHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
 

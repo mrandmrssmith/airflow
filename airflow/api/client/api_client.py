@@ -24,7 +24,7 @@ import httpx
 class Client:
     """Base API client for all API clients."""
 
-    def __init__(self, api_base_url, auth=None, session=None):
+    def __init__(self, api_base_url, auth=None, session: httpx.Client | None = None):
         self._api_base_url = api_base_url
         self._session: httpx.Client = session or httpx.Client()
         if auth:
@@ -60,12 +60,13 @@ class Client:
         """Get all pools."""
         raise NotImplementedError()
 
-    def create_pool(self, name, slots, description):
+    def create_pool(self, name, slots, description, include_deferred):
         """Create a pool.
 
         :param name: pool name
         :param slots: pool slots amount
         :param description: pool description
+        :param include_deferred: include deferred tasks in pool calculations
         """
         raise NotImplementedError()
 
@@ -79,6 +80,7 @@ class Client:
     def get_lineage(self, dag_id: str, execution_date: str):
         """
         Return the lineage information for the dag on this execution date.
+
         :param dag_id:
         :param execution_date:
         :return:

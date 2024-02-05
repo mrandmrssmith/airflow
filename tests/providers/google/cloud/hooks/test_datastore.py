@@ -17,7 +17,6 @@
 # under the License.
 from __future__ import annotations
 
-import unittest
 from unittest import mock
 from unittest.mock import call, patch
 
@@ -32,14 +31,17 @@ GCP_PROJECT_ID = "test"
 def mock_init(
     self,
     gcp_conn_id,
-    delegate_to=None,
     impersonation_chain=None,
 ):
     pass
 
 
-class TestDatastoreHook(unittest.TestCase):
-    def setUp(self):
+class TestDatastoreHook:
+    def test_delegate_to_runtime_error(self):
+        with pytest.raises(RuntimeError):
+            DatastoreHook(gcp_conn_id="GCP_CONN_ID", delegate_to="delegate_to")
+
+    def setup_method(self):
         with patch(
             "airflow.providers.google.common.hooks.base_google.GoogleBaseHook.__init__", new=mock_init
         ):

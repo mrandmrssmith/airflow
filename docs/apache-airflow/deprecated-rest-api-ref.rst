@@ -21,7 +21,7 @@ Deprecated REST API
 .. warning::
 
   This REST API is deprecated since version 2.0. Please consider using the :doc:`stable REST API <stable-rest-api-ref>`.
-  For more information on migration, see `UPDATING.md <https://github.com/apache/airflow/blob/main/UPDATING.md>`_
+  For more information on migration, see `UPDATING.md <https://airflow.apache.org/docs/apache-airflow/stable/howto/upgrading-from-1-10/>`_
 
 Before Airflow 2.0 this REST API was known as the "experimental" API, but now that the :doc:`stable REST API <stable-rest-api-ref>` is available, it has been renamed.
 
@@ -37,7 +37,7 @@ Endpoints
 
 .. http:post:: /api/experimental/dags/<DAG_ID>/dag_runs
 
-  Creates a dag_run for a given dag id.
+  Creates a dag_run for a given DAG id.
   Note: If execution_date is not specified in the body, Airflow by default creates only one DAG per second for a given DAG_ID.
   In order to create multiple DagRun within one second, you should set parameter ``"replace_microseconds"`` to ``"false"`` (boolean as string).
 
@@ -124,4 +124,4 @@ Endpoints
 
 .. http:get:: /api/experimental/lineage/<DAG_ID>/<string:execution_date>/
 
-  Returns the lineage information for the dag.
+  Returns the lineage information for the DAG.

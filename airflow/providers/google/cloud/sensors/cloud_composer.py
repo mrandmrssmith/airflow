@@ -21,7 +21,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Sequence
 
-from airflow.exceptions import AirflowException
+from deprecated import deprecated
+
+from airflow.exceptions import AirflowException, AirflowProviderDeprecationWarning, AirflowSkipException
 from airflow.providers.google.cloud.triggers.cloud_composer import CloudComposerExecutionTrigger
 from airflow.sensors.base import BaseSensorOperator
 
@@ -29,16 +31,28 @@ if TYPE_CHECKING:
     from airflow.utils.context import Context
 
 
+@deprecated(
+    reason=(
+        "The `CloudComposerEnvironmentSensor` operator is deprecated. "
+        "You can achieve the same functionality "
+        "by using operators in deferrable or non-deferrable mode, since every operator for Cloud "
+        "Composer will wait for the operation to complete."
+    ),
+    category=AirflowProviderDeprecationWarning,
+)
 class CloudComposerEnvironmentSensor(BaseSensorOperator):
     """
-    Check the status of the Cloud Composer Environment task
+    Check the status of the Cloud Composer Environment task.
+
+    This Sensor is deprecated. You can achieve the same functionality by using Cloud Composer Operators
+    CloudComposerCreateEnvironmentOperator, CloudComposerDeleteEnvironmentOperator and
+    CloudComposerUpdateEnvironmentOperator in  deferrable or non-deferrable mode, since every operator
+    gives user a possibility to wait (asynchronously or synchronously) until Operation will be finished.
 
     :param project_id: Required. The ID of the Google Cloud project that the service belongs to.
     :param region: Required. The ID of the Google Cloud region that the service belongs to.
     :param operation_name: The name of the operation resource
     :param gcp_conn_id: The connection ID to use when fetching connection info.
-    :param delegate_to: The account to impersonate, if any. For this to work, the service account making the
-        request must have  domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -57,7 +71,6 @@ class CloudComposerEnvironmentSensor(BaseSensorOperator):
         region: str,
         operation_name: str,
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         pooling_period_seconds: int = 30,
         **kwargs,
@@ -68,7 +81,6 @@ class CloudComposerEnvironmentSensor(BaseSensorOperator):
         self.operation_name = operation_name
         self.pooling_period_seconds = pooling_period_seconds
         self.gcp_conn_id = gcp_conn_id
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
 
     def execute(self, context: Context) -> None:
@@ -80,7 +92,6 @@ class CloudComposerEnvironmentSensor(BaseSensorOperator):
                 operation_name=self.operation_name,
                 gcp_conn_id=self.gcp_conn_id,
                 impersonation_chain=self.impersonation_chain,
-                delegate_to=self.delegate_to,
                 pooling_period_seconds=self.pooling_period_seconds,
             ),
             method_name="execute_complete",
@@ -89,11 +100,20 @@ class CloudComposerEnvironmentSensor(BaseSensorOperator):
     def execute_complete(self, context: dict[str, Any], event: dict[str, str] | None = None) -> str:
         """
         Callback for when the trigger fires - returns immediately.
-        Relies on trigger to throw an exception, otherwise it assumes execution was
-        successful.
+
+        Relies on trigger to throw an exception, otherwise it assumes execution was successful.
         """
         if event:
             if event.get("operation_done"):
                 return event["operation_done"]
+
+            # TODO: remove this if check when min_airflow_version is set to higher than 2.7.1
+            if self.soft_fail:
+                raise AirflowSkipException(event["message"])
             raise AirflowException(event["message"])
-        raise AirflowException("No event received in trigger callback")
+
+        # TODO: remove this if check when min_airflow_version is set to higher than 2.7.1
+        message = "No event received in trigger callback"
+        if self.soft_fail:
+            raise AirflowSkipException(message)
+        raise AirflowException(message)

@@ -23,7 +23,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
-from airflow import models
+from airflow.models.dag import DAG
 from airflow.providers.google.cloud.operators.bigquery import (
     BigQueryCreateEmptyDatasetOperator,
     BigQueryDeleteDatasetOperator,
@@ -37,24 +37,38 @@ DAG_ID = "gcs_to_bigquery_operator_async"
 
 DATASET_NAME_STR = f"dataset_{DAG_ID}_{ENV_ID}_STR"
 DATASET_NAME_DATE = f"dataset_{DAG_ID}_{ENV_ID}_DATE"
+DATASET_NAME_JSON = f"dataset_{DAG_ID}_{ENV_ID}_JSON"
+DATASET_NAME_DELIMITER = f"dataset_{DAG_ID}_{ENV_ID}_DELIMITER"
 TABLE_NAME_STR = "test_str"
 TABLE_NAME_DATE = "test_date"
+TABLE_NAME_JSON = "test_json"
+TABLE_NAME_DELIMITER = "test_delimiter"
 MAX_ID_STR = "name"
 MAX_ID_DATE = "date"
 
-with models.DAG(
+with DAG(
     dag_id=DAG_ID,
     schedule="@once",
     start_date=datetime(2021, 1, 1),
     catchup=False,
     tags=["example", "gcs"],
 ) as dag:
-    create_test_dataset_for_string_fileds = BigQueryCreateEmptyDatasetOperator(
+    create_test_dataset_for_string_fields = BigQueryCreateEmptyDatasetOperator(
         task_id="create_airflow_test_dataset_str", dataset_id=DATASET_NAME_STR, project_id=PROJECT_ID
     )
 
-    create_test_dataset_for_date_fileds = BigQueryCreateEmptyDatasetOperator(
+    create_test_dataset_for_date_fields = BigQueryCreateEmptyDatasetOperator(
         task_id="create_airflow_test_dataset_date", dataset_id=DATASET_NAME_DATE, project_id=PROJECT_ID
+    )
+
+    create_test_dataset_for_json_fields = BigQueryCreateEmptyDatasetOperator(
+        task_id="create_airflow_test_dataset_json", dataset_id=DATASET_NAME_JSON, project_id=PROJECT_ID
+    )
+
+    create_test_dataset_for_delimiter_fields = BigQueryCreateEmptyDatasetOperator(
+        task_id="create_airflow_test_dataset_delimiter",
+        dataset_id=DATASET_NAME_DELIMITER,
+        project_id=PROJECT_ID,
     )
 
     # [START howto_operator_gcs_to_bigquery_async]
@@ -66,7 +80,7 @@ with models.DAG(
         write_disposition="WRITE_TRUNCATE",
         external_table=False,
         autodetect=True,
-        max_id_key=MAX_ID_STR,
+        max_id_key="string_field_0",
         deferrable=True,
     )
 
@@ -79,6 +93,34 @@ with models.DAG(
         external_table=False,
         autodetect=True,
         max_id_key=MAX_ID_DATE,
+        deferrable=True,
+    )
+
+    load_json = GCSToBigQueryOperator(
+        task_id="gcs_to_bigquery_example_date_json_async",
+        bucket="cloud-samples-data",
+        source_objects=["bigquery/us-states/us-states.json"],
+        source_format="NEWLINE_DELIMITED_JSON",
+        destination_project_dataset_table=f"{DATASET_NAME_JSON}.{TABLE_NAME_JSON}",
+        write_disposition="WRITE_TRUNCATE",
+        external_table=False,
+        autodetect=True,
+        max_id_key=MAX_ID_STR,
+        deferrable=True,
+    )
+
+    load_csv_delimiter = GCSToBigQueryOperator(
+        task_id="gcs_to_bigquery_example_delimiter_async",
+        bucket="big-query-samples",
+        source_objects=["employees-tabular.csv"],
+        source_format="csv",
+        destination_project_dataset_table=f"{DATASET_NAME_DELIMITER}.{TABLE_NAME_DELIMITER}",
+        write_disposition="WRITE_TRUNCATE",
+        external_table=False,
+        autodetect=True,
+        field_delimiter="\t",
+        quote_character="",
+        max_id_key=MAX_ID_STR,
         deferrable=True,
     )
     # [END howto_operator_gcs_to_bigquery_async]
@@ -97,16 +139,36 @@ with models.DAG(
         trigger_rule=TriggerRule.ALL_DONE,
     )
 
+    delete_test_dataset_json = BigQueryDeleteDatasetOperator(
+        task_id="delete_airflow_test_json_dataset",
+        dataset_id=DATASET_NAME_JSON,
+        delete_contents=True,
+        trigger_rule=TriggerRule.ALL_DONE,
+    )
+
+    delete_test_dataset_delimiter = BigQueryDeleteDatasetOperator(
+        task_id="delete_airflow_test_delimiter",
+        dataset_id=DATASET_NAME_JSON,
+        delete_contents=True,
+        trigger_rule=TriggerRule.ALL_DONE,
+    )
+
     (
         # TEST SETUP
-        create_test_dataset_for_string_fileds
-        >> create_test_dataset_for_date_fileds
+        create_test_dataset_for_string_fields
+        >> create_test_dataset_for_date_fields
+        >> create_test_dataset_for_json_fields
+        >> create_test_dataset_for_delimiter_fields
         # TEST BODY
         >> load_string_based_csv
         >> load_date_based_csv
+        >> load_json
+        >> load_csv_delimiter
         # TEST TEARDOWN
         >> delete_test_dataset_str
         >> delete_test_dataset_date
+        >> delete_test_dataset_json
+        >> delete_test_dataset_delimiter
     )
 
     from tests.system.utils.watcher import watcher

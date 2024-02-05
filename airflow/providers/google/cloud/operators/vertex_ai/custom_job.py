@@ -22,24 +22,25 @@ from typing import TYPE_CHECKING, Sequence
 
 from google.api_core.exceptions import NotFound
 from google.api_core.gapic_v1.method import DEFAULT, _MethodDefault
-from google.api_core.retry import Retry
 from google.cloud.aiplatform.models import Model
 from google.cloud.aiplatform_v1.types.dataset import Dataset
 from google.cloud.aiplatform_v1.types.training_pipeline import TrainingPipeline
 
-from airflow.models import BaseOperator
 from airflow.providers.google.cloud.hooks.vertex_ai.custom_job import CustomJobHook
 from airflow.providers.google.cloud.links.vertex_ai import (
     VertexAIModelLink,
     VertexAITrainingLink,
     VertexAITrainingPipelinesLink,
 )
+from airflow.providers.google.cloud.operators.cloud_base import GoogleCloudBaseOperator
 
 if TYPE_CHECKING:
+    from google.api_core.retry import Retry
+
     from airflow.utils.context import Context
 
 
-class CustomTrainingJobBaseOperator(BaseOperator):
+class CustomTrainingJobBaseOperator(GoogleCloudBaseOperator):
     """The base class for operators that launch Custom jobs on VertexAI."""
 
     def __init__(
@@ -60,6 +61,10 @@ class CustomTrainingJobBaseOperator(BaseOperator):
         model_instance_schema_uri: str | None = None,
         model_parameters_schema_uri: str | None = None,
         model_prediction_schema_uri: str | None = None,
+        parent_model: str | None = None,
+        is_default_version: bool | None = None,
+        model_version_aliases: list[str] | None = None,
+        model_version_description: str | None = None,
         labels: dict[str, str] | None = None,
         training_encryption_spec_key_name: str | None = None,
         model_encryption_spec_key_name: str | None = None,
@@ -92,7 +97,6 @@ class CustomTrainingJobBaseOperator(BaseOperator):
         tensorboard: str | None = None,
         sync=True,
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         **kwargs,
     ) -> None:
@@ -114,6 +118,10 @@ class CustomTrainingJobBaseOperator(BaseOperator):
         self.model_parameters_schema_uri = model_parameters_schema_uri
         self.model_prediction_schema_uri = model_prediction_schema_uri
         self.labels = labels
+        self.parent_model = parent_model
+        self.is_default_version = is_default_version
+        self.model_version_aliases = model_version_aliases
+        self.model_version_description = model_version_description
         self.training_encryption_spec_key_name = training_encryption_spec_key_name
         self.model_encryption_spec_key_name = model_encryption_spec_key_name
         self.staging_bucket = staging_bucket
@@ -147,12 +155,11 @@ class CustomTrainingJobBaseOperator(BaseOperator):
         self.sync = sync
         # END Run param
         self.gcp_conn_id = gcp_conn_id
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
 
 
 class CreateCustomContainerTrainingJobOperator(CustomTrainingJobBaseOperator):
-    """Create Custom Container Training job
+    """Create Custom Container Training job.
 
     :param project_id: Required. The ID of the Google Cloud project that the service belongs to.
     :param region: Required. The ID of the Google Cloud region that the service belongs to.
@@ -193,48 +200,66 @@ class CreateCustomContainerTrainingJobOperator(CustomTrainingJobBaseOperator):
         the network.
     :param model_description: The description of the Model.
     :param model_instance_schema_uri: Optional. Points to a YAML file stored on Google Cloud
-            Storage describing the format of a single instance, which
-            are used in
-            ``PredictRequest.instances``,
-            ``ExplainRequest.instances``
-            and
-            ``BatchPredictionJob.input_config``.
-            The schema is defined as an OpenAPI 3.0.2 `Schema
-            Object <https://tinyurl.com/y538mdwt#schema-object>`__.
-            AutoML Models always have this field populated by AI
-            Platform. Note: The URI given on output will be immutable
-            and probably different, including the URI scheme, than the
-            one given on input. The output URI will point to a location
-            where the user only has a read access.
+        Storage describing the format of a single instance, which
+        are used in
+        ``PredictRequest.instances``,
+        ``ExplainRequest.instances``
+        and
+        ``BatchPredictionJob.input_config``.
+        The schema is defined as an OpenAPI 3.0.2 `Schema
+        Object <https://tinyurl.com/y538mdwt#schema-object>`__.
+        AutoML Models always have this field populated by AI
+        Platform. Note: The URI given on output will be immutable
+        and probably different, including the URI scheme, than the
+        one given on input. The output URI will point to a location
+        where the user only has a read access.
     :param model_parameters_schema_uri: Optional. Points to a YAML file stored on Google Cloud
-            Storage describing the parameters of prediction and
-            explanation via
-            ``PredictRequest.parameters``,
-            ``ExplainRequest.parameters``
-            and
-            ``BatchPredictionJob.model_parameters``.
-            The schema is defined as an OpenAPI 3.0.2 `Schema
-            Object <https://tinyurl.com/y538mdwt#schema-object>`__.
-            AutoML Models always have this field populated by AI
-            Platform, if no parameters are supported it is set to an
-            empty string. Note: The URI given on output will be
-            immutable and probably different, including the URI scheme,
-            than the one given on input. The output URI will point to a
-            location where the user only has a read access.
+        Storage describing the parameters of prediction and
+        explanation via
+        ``PredictRequest.parameters``,
+        ``ExplainRequest.parameters``
+        and
+        ``BatchPredictionJob.model_parameters``.
+        The schema is defined as an OpenAPI 3.0.2 `Schema
+        Object <https://tinyurl.com/y538mdwt#schema-object>`__.
+        AutoML Models always have this field populated by AI
+        Platform, if no parameters are supported it is set to an
+        empty string. Note: The URI given on output will be
+        immutable and probably different, including the URI scheme,
+        than the one given on input. The output URI will point to a
+        location where the user only has a read access.
     :param model_prediction_schema_uri: Optional. Points to a YAML file stored on Google Cloud
-            Storage describing the format of a single prediction
-            produced by this Model, which are returned via
-            ``PredictResponse.predictions``,
-            ``ExplainResponse.explanations``,
-            and
-            ``BatchPredictionJob.output_config``.
-            The schema is defined as an OpenAPI 3.0.2 `Schema
-            Object <https://tinyurl.com/y538mdwt#schema-object>`__.
-            AutoML Models always have this field populated by AI
-            Platform. Note: The URI given on output will be immutable
-            and probably different, including the URI scheme, than the
-            one given on input. The output URI will point to a location
-            where the user only has a read access.
+        Storage describing the format of a single prediction
+        produced by this Model, which are returned via
+        ``PredictResponse.predictions``,
+        ``ExplainResponse.explanations``,
+        and
+        ``BatchPredictionJob.output_config``.
+        The schema is defined as an OpenAPI 3.0.2 `Schema
+        Object <https://tinyurl.com/y538mdwt#schema-object>`__.
+        AutoML Models always have this field populated by AI
+        Platform. Note: The URI given on output will be immutable
+        and probably different, including the URI scheme, than the
+        one given on input. The output URI will point to a location
+        where the user only has a read access.
+    :param parent_model: Optional. The resource name or model ID of an existing model.
+        The new model uploaded by this job will be a version of `parent_model`.
+        Only set this field when training a new version of an existing model.
+    :param is_default_version: Optional. When set to True, the newly uploaded model version will
+        automatically have alias "default" included. Subsequent uses of
+        the model produced by this job without a version specified will
+        use this "default" version.
+        When set to False, the "default" alias will not be moved.
+        Actions targeting the model version produced by this job will need
+        to specifically reference this version by ID or alias.
+        New model uploads, i.e. version 1, will always be "default" aliased.
+        :param model_version_aliases: Optional. User provided version aliases so that the model version
+        uploaded by this job can be referenced via alias instead of
+        auto-generated version ID. A default version alias will be created
+        for the first version of the model.
+        The format is [a-z][a-zA-Z0-9-]{0,126}[a-z0-9]
+    :param model_version_description: Optional. The description of the model version
+        being uploaded by this job.
     :param project_id: Project to run training in.
     :param region: Location to run training in.
     :param labels: Optional. The labels with user-defined metadata to
@@ -397,9 +422,6 @@ class CreateCustomContainerTrainingJobOperator(CustomTrainingJobBaseOperator):
             will be executed in concurrent Future and any downstream object will
             be immediately returned and synced when the Future has completed.
     :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -413,6 +435,7 @@ class CreateCustomContainerTrainingJobOperator(CustomTrainingJobBaseOperator):
     template_fields = (
         "region",
         "command",
+        "parent_model",
         "dataset_id",
         "impersonation_chain",
     )
@@ -430,9 +453,10 @@ class CreateCustomContainerTrainingJobOperator(CustomTrainingJobBaseOperator):
     def execute(self, context: Context):
         self.hook = CustomJobHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
+        self.parent_model = self.parent_model.rpartition("@")[0] if self.parent_model else None
+
         model, training_id, custom_job_id = self.hook.create_custom_container_training_job(
             project_id=self.project_id,
             region=self.region,
@@ -450,6 +474,10 @@ class CreateCustomContainerTrainingJobOperator(CustomTrainingJobBaseOperator):
             model_instance_schema_uri=self.model_instance_schema_uri,
             model_parameters_schema_uri=self.model_parameters_schema_uri,
             model_prediction_schema_uri=self.model_prediction_schema_uri,
+            parent_model=self.parent_model,
+            is_default_version=self.is_default_version,
+            model_version_aliases=self.model_version_aliases,
+            model_version_description=self.model_version_description,
             labels=self.labels,
             training_encryption_spec_key_name=self.training_encryption_spec_key_name,
             model_encryption_spec_key_name=self.model_encryption_spec_key_name,
@@ -486,6 +514,7 @@ class CreateCustomContainerTrainingJobOperator(CustomTrainingJobBaseOperator):
         if model:
             result = Model.to_dict(model)
             model_id = self.hook.extract_model_id(result)
+            self.xcom_push(context, key="model_id", value=model_id)
             VertexAIModelLink.persist(context=context, task_instance=self, model_id=model_id)
         else:
             result = model  # type: ignore
@@ -495,16 +524,13 @@ class CreateCustomContainerTrainingJobOperator(CustomTrainingJobBaseOperator):
         return result
 
     def on_kill(self) -> None:
-        """
-        Callback called when the operator is killed.
-        Cancel any running job.
-        """
+        """Callback called when the operator is killed; cancel any running job."""
         if self.hook:
             self.hook.cancel_job()
 
 
 class CreateCustomPythonPackageTrainingJobOperator(CustomTrainingJobBaseOperator):
-    """Create Custom Python Package Training job
+    """Create Custom Python Package Training job.
 
     :param project_id: Required. The ID of the Google Cloud project that the service belongs to.
     :param region: Required. The ID of the Google Cloud region that the service belongs to.
@@ -545,78 +571,96 @@ class CreateCustomPythonPackageTrainingJobOperator(CustomTrainingJobBaseOperator
         the network.
     :param model_description: The description of the Model.
     :param model_instance_schema_uri: Optional. Points to a YAML file stored on Google Cloud
-            Storage describing the format of a single instance, which
-            are used in
-            ``PredictRequest.instances``,
-            ``ExplainRequest.instances``
-            and
-            ``BatchPredictionJob.input_config``.
-            The schema is defined as an OpenAPI 3.0.2 `Schema
-            Object <https://tinyurl.com/y538mdwt#schema-object>`__.
-            AutoML Models always have this field populated by AI
-            Platform. Note: The URI given on output will be immutable
-            and probably different, including the URI scheme, than the
-            one given on input. The output URI will point to a location
-            where the user only has a read access.
+        Storage describing the format of a single instance, which
+        are used in
+        ``PredictRequest.instances``,
+        ``ExplainRequest.instances``
+        and
+        ``BatchPredictionJob.input_config``.
+        The schema is defined as an OpenAPI 3.0.2 `Schema
+        Object <https://tinyurl.com/y538mdwt#schema-object>`__.
+        AutoML Models always have this field populated by AI
+        Platform. Note: The URI given on output will be immutable
+        and probably different, including the URI scheme, than the
+        one given on input. The output URI will point to a location
+        where the user only has a read access.
     :param model_parameters_schema_uri: Optional. Points to a YAML file stored on Google Cloud
-            Storage describing the parameters of prediction and
-            explanation via
-            ``PredictRequest.parameters``,
-            ``ExplainRequest.parameters``
-            and
-            ``BatchPredictionJob.model_parameters``.
-            The schema is defined as an OpenAPI 3.0.2 `Schema
-            Object <https://tinyurl.com/y538mdwt#schema-object>`__.
-            AutoML Models always have this field populated by AI
-            Platform, if no parameters are supported it is set to an
-            empty string. Note: The URI given on output will be
-            immutable and probably different, including the URI scheme,
-            than the one given on input. The output URI will point to a
-            location where the user only has a read access.
+        Storage describing the parameters of prediction and
+        explanation via
+        ``PredictRequest.parameters``,
+        ``ExplainRequest.parameters``
+        and
+        ``BatchPredictionJob.model_parameters``.
+        The schema is defined as an OpenAPI 3.0.2 `Schema
+        Object <https://tinyurl.com/y538mdwt#schema-object>`__.
+        AutoML Models always have this field populated by AI
+        Platform, if no parameters are supported it is set to an
+        empty string. Note: The URI given on output will be
+        immutable and probably different, including the URI scheme,
+        than the one given on input. The output URI will point to a
+        location where the user only has a read access.
     :param model_prediction_schema_uri: Optional. Points to a YAML file stored on Google Cloud
-            Storage describing the format of a single prediction
-            produced by this Model, which are returned via
-            ``PredictResponse.predictions``,
-            ``ExplainResponse.explanations``,
-            and
-            ``BatchPredictionJob.output_config``.
-            The schema is defined as an OpenAPI 3.0.2 `Schema
-            Object <https://tinyurl.com/y538mdwt#schema-object>`__.
-            AutoML Models always have this field populated by AI
-            Platform. Note: The URI given on output will be immutable
-            and probably different, including the URI scheme, than the
-            one given on input. The output URI will point to a location
-            where the user only has a read access.
+        Storage describing the format of a single prediction
+        produced by this Model, which are returned via
+        ``PredictResponse.predictions``,
+        ``ExplainResponse.explanations``,
+        and
+        ``BatchPredictionJob.output_config``.
+        The schema is defined as an OpenAPI 3.0.2 `Schema
+        Object <https://tinyurl.com/y538mdwt#schema-object>`__.
+        AutoML Models always have this field populated by AI
+        Platform. Note: The URI given on output will be immutable
+        and probably different, including the URI scheme, than the
+        one given on input. The output URI will point to a location
+        where the user only has a read access.
+    :param parent_model: Optional. The resource name or model ID of an existing model.
+        The new model uploaded by this job will be a version of `parent_model`.
+        Only set this field when training a new version of an existing model.
+    :param is_default_version: Optional. When set to True, the newly uploaded model version will
+        automatically have alias "default" included. Subsequent uses of
+        the model produced by this job without a version specified will
+        use this "default" version.
+        When set to False, the "default" alias will not be moved.
+        Actions targeting the model version produced by this job will need
+        to specifically reference this version by ID or alias.
+        New model uploads, i.e. version 1, will always be "default" aliased.
+    :param model_version_aliases: Optional. User provided version aliases so that the model version
+        uploaded by this job can be referenced via alias instead of
+        auto-generated version ID. A default version alias will be created
+        for the first version of the model.
+        The format is [a-z][a-zA-Z0-9-]{0,126}[a-z0-9]
+    :param model_version_description: Optional. The description of the model version
+        being uploaded by this job.
     :param project_id: Project to run training in.
     :param region: Location to run training in.
     :param labels: Optional. The labels with user-defined metadata to
-            organize TrainingPipelines.
-            Label keys and values can be no longer than 64
-            characters, can only
-            contain lowercase letters, numeric characters,
-            underscores and dashes. International characters
-            are allowed.
-            See https://goo.gl/xmQnxf for more information
-            and examples of labels.
+        organize TrainingPipelines.
+        Label keys and values can be no longer than 64
+        characters, can only
+        contain lowercase letters, numeric characters,
+        underscores and dashes. International characters
+        are allowed.
+        See https://goo.gl/xmQnxf for more information
+        and examples of labels.
     :param training_encryption_spec_key_name: Optional. The Cloud KMS resource identifier of the customer
-            managed encryption key used to protect the training pipeline. Has the
-            form:
-            ``projects/my-project/locations/my-region/keyRings/my-kr/cryptoKeys/my-key``.
-            The key needs to be in the same region as where the compute
-            resource is created.
+        managed encryption key used to protect the training pipeline. Has the
+        form:
+        ``projects/my-project/locations/my-region/keyRings/my-kr/cryptoKeys/my-key``.
+        The key needs to be in the same region as where the compute
+        resource is created.
 
-            If set, this TrainingPipeline will be secured by this key.
+        If set, this TrainingPipeline will be secured by this key.
 
-            Note: Model trained by this TrainingPipeline is also secured
-            by this key if ``model_to_upload`` is not set separately.
+        Note: Model trained by this TrainingPipeline is also secured
+        by this key if ``model_to_upload`` is not set separately.
     :param model_encryption_spec_key_name: Optional. The Cloud KMS resource identifier of the customer
-            managed encryption key used to protect the model. Has the
-            form:
-            ``projects/my-project/locations/my-region/keyRings/my-kr/cryptoKeys/my-key``.
-            The key needs to be in the same region as where the compute
-            resource is created.
+        managed encryption key used to protect the model. Has the
+        form:
+        ``projects/my-project/locations/my-region/keyRings/my-kr/cryptoKeys/my-key``.
+        The key needs to be in the same region as where the compute
+        resource is created.
 
-            If set, the trained Model will be secured by this key.
+        If set, the trained Model will be secured by this key.
     :param staging_bucket: Bucket used to stage source and training artifacts.
     :param dataset: Vertex AI to fit this training against.
     :param annotation_schema_uri: Google Cloud Storage URI points to a YAML file describing
@@ -636,19 +680,19 @@ class CreateCustomPythonPackageTrainingJobOperator(CustomTrainingJobBaseOperator
         and
         ``annotation_schema_uri``.
     :param model_display_name: If the script produces a managed Vertex AI Model. The display name of
-            the Model. The name can be up to 128 characters long and can be consist
-            of any UTF-8 characters.
+        the Model. The name can be up to 128 characters long and can be consist
+        of any UTF-8 characters.
 
-            If not provided upon creation, the job's display_name is used.
+        If not provided upon creation, the job's display_name is used.
     :param model_labels: Optional. The labels with user-defined metadata to
-            organize your Models.
-            Label keys and values can be no longer than 64
-            characters, can only
-            contain lowercase letters, numeric characters,
-            underscores and dashes. International characters
-            are allowed.
-            See https://goo.gl/xmQnxf for more information
-            and examples of labels.
+        organize your Models.
+        Label keys and values can be no longer than 64
+        characters, can only
+        contain lowercase letters, numeric characters,
+        underscores and dashes. International characters
+        are allowed.
+        See https://goo.gl/xmQnxf for more information
+        and examples of labels.
     :param base_output_dir: GCS output directory of job. If not provided a timestamped directory in the
         staging directory will be used.
 
@@ -661,38 +705,38 @@ class CreateCustomPythonPackageTrainingJobOperator(CustomTrainingJobBaseOperator
         -  AIP_TENSORBOARD_LOG_DIR: a Cloud Storage URI of a directory intended for saving TensorBoard
             logs, i.e. <base_output_dir>/logs/
     :param service_account: Specifies the service account for workload run-as account.
-            Users submitting jobs must have act-as permission on this run-as account.
+        Users submitting jobs must have act-as permission on this run-as account.
     :param network: The full name of the Compute Engine network to which the job
-            should be peered.
-            Private services access must already be configured for the network.
-            If left unspecified, the job is not peered with any network.
+        should be peered.
+        Private services access must already be configured for the network.
+        If left unspecified, the job is not peered with any network.
     :param bigquery_destination: Provide this field if `dataset` is a BiqQuery dataset.
-            The BigQuery project location where the training data is to
-            be written to. In the given project a new dataset is created
-            with name
-            ``dataset_<dataset-id>_<annotation-type>_<timestamp-of-training-call>``
-            where timestamp is in YYYY_MM_DDThh_mm_ss_sssZ format. All
-            training input data will be written into that dataset. In
-            the dataset three tables will be created, ``training``,
-            ``validation`` and ``test``.
+        The BigQuery project location where the training data is to
+        be written to. In the given project a new dataset is created
+        with name
+        ``dataset_<dataset-id>_<annotation-type>_<timestamp-of-training-call>``
+        where timestamp is in YYYY_MM_DDThh_mm_ss_sssZ format. All
+        training input data will be written into that dataset. In
+        the dataset three tables will be created, ``training``,
+        ``validation`` and ``test``.
 
-            -  AIP_DATA_FORMAT = "bigquery".
-            -  AIP_TRAINING_DATA_URI ="bigquery_destination.dataset_*.training"
-            -  AIP_VALIDATION_DATA_URI = "bigquery_destination.dataset_*.validation"
-            -  AIP_TEST_DATA_URI = "bigquery_destination.dataset_*.test"
+        -  AIP_DATA_FORMAT = "bigquery".
+        -  AIP_TRAINING_DATA_URI ="bigquery_destination.dataset_*.training"
+        -  AIP_VALIDATION_DATA_URI = "bigquery_destination.dataset_*.validation"
+        -  AIP_TEST_DATA_URI = "bigquery_destination.dataset_*.test"
     :param args: Command line arguments to be passed to the Python script.
     :param environment_variables: Environment variables to be passed to the container.
-            Should be a dictionary where keys are environment variable names
-            and values are environment variable values for those names.
-            At most 10 environment variables can be specified.
-            The Name of the environment variable must be unique.
+        Should be a dictionary where keys are environment variable names
+        and values are environment variable values for those names.
+        At most 10 environment variables can be specified.
+        The Name of the environment variable must be unique.
     :param replica_count: The number of worker replicas. If replica count = 1 then one chief
-            replica will be provisioned. If replica_count > 1 the remainder will be
-            provisioned as a worker replica pool.
+        replica will be provisioned. If replica_count > 1 the remainder will be
+        provisioned as a worker replica pool.
     :param machine_type: The type of machine to use for training.
     :param accelerator_type: Hardware accelerator type. One of ACCELERATOR_TYPE_UNSPECIFIED,
-            NVIDIA_TESLA_K80, NVIDIA_TESLA_P100, NVIDIA_TESLA_V100, NVIDIA_TESLA_P4,
-            NVIDIA_TESLA_T4
+        NVIDIA_TESLA_K80, NVIDIA_TESLA_P100, NVIDIA_TESLA_V100, NVIDIA_TESLA_P4,
+        NVIDIA_TESLA_T4
     :param accelerator_count: The number of accelerators to attach to a worker replica.
     :param boot_disk_type: Type of the boot disk, default is `pd-ssd`.
             Valid values: `pd-ssd` (Persistent Disk Solid State Drive) or
@@ -749,9 +793,6 @@ class CreateCustomPythonPackageTrainingJobOperator(CustomTrainingJobBaseOperator
             will be executed in concurrent Future and any downstream object will
             be immediately returned and synced when the Future has completed.
     :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -763,6 +804,7 @@ class CreateCustomPythonPackageTrainingJobOperator(CustomTrainingJobBaseOperator
     """
 
     template_fields = (
+        "parent_model",
         "region",
         "dataset_id",
         "impersonation_chain",
@@ -783,9 +825,9 @@ class CreateCustomPythonPackageTrainingJobOperator(CustomTrainingJobBaseOperator
     def execute(self, context: Context):
         self.hook = CustomJobHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
+        self.parent_model = self.parent_model.rpartition("@")[0] if self.parent_model else None
         model, training_id, custom_job_id = self.hook.create_custom_python_package_training_job(
             project_id=self.project_id,
             region=self.region,
@@ -804,6 +846,10 @@ class CreateCustomPythonPackageTrainingJobOperator(CustomTrainingJobBaseOperator
             model_instance_schema_uri=self.model_instance_schema_uri,
             model_parameters_schema_uri=self.model_parameters_schema_uri,
             model_prediction_schema_uri=self.model_prediction_schema_uri,
+            parent_model=self.parent_model,
+            is_default_version=self.is_default_version,
+            model_version_aliases=self.model_version_aliases,
+            model_version_description=self.model_version_description,
             labels=self.labels,
             training_encryption_spec_key_name=self.training_encryption_spec_key_name,
             model_encryption_spec_key_name=self.model_encryption_spec_key_name,
@@ -840,6 +886,7 @@ class CreateCustomPythonPackageTrainingJobOperator(CustomTrainingJobBaseOperator
         if model:
             result = Model.to_dict(model)
             model_id = self.hook.extract_model_id(result)
+            self.xcom_push(context, key="model_id", value=model_id)
             VertexAIModelLink.persist(context=context, task_instance=self, model_id=model_id)
         else:
             result = model  # type: ignore
@@ -849,16 +896,13 @@ class CreateCustomPythonPackageTrainingJobOperator(CustomTrainingJobBaseOperator
         return result
 
     def on_kill(self) -> None:
-        """
-        Callback called when the operator is killed.
-        Cancel any running job.
-        """
+        """Callback called when the operator is killed; cancel any running job."""
         if self.hook:
             self.hook.cancel_job()
 
 
 class CreateCustomTrainingJobOperator(CustomTrainingJobBaseOperator):
-    """Create Custom Training job
+    """Create Custom Training job.
 
     :param project_id: Required. The ID of the Google Cloud project that the service belongs to.
     :param region: Required. The ID of the Google Cloud region that the service belongs to.
@@ -899,78 +943,96 @@ class CreateCustomTrainingJobOperator(CustomTrainingJobBaseOperator):
         the network.
     :param model_description: The description of the Model.
     :param model_instance_schema_uri: Optional. Points to a YAML file stored on Google Cloud
-            Storage describing the format of a single instance, which
-            are used in
-            ``PredictRequest.instances``,
-            ``ExplainRequest.instances``
-            and
-            ``BatchPredictionJob.input_config``.
-            The schema is defined as an OpenAPI 3.0.2 `Schema
-            Object <https://tinyurl.com/y538mdwt#schema-object>`__.
-            AutoML Models always have this field populated by AI
-            Platform. Note: The URI given on output will be immutable
-            and probably different, including the URI scheme, than the
-            one given on input. The output URI will point to a location
-            where the user only has a read access.
+        Storage describing the format of a single instance, which
+        are used in
+        ``PredictRequest.instances``,
+        ``ExplainRequest.instances``
+        and
+        ``BatchPredictionJob.input_config``.
+        The schema is defined as an OpenAPI 3.0.2 `Schema
+        Object <https://tinyurl.com/y538mdwt#schema-object>`__.
+        AutoML Models always have this field populated by AI
+        Platform. Note: The URI given on output will be immutable
+        and probably different, including the URI scheme, than the
+        one given on input. The output URI will point to a location
+        where the user only has a read access.
     :param model_parameters_schema_uri: Optional. Points to a YAML file stored on Google Cloud
-            Storage describing the parameters of prediction and
-            explanation via
-            ``PredictRequest.parameters``,
-            ``ExplainRequest.parameters``
-            and
-            ``BatchPredictionJob.model_parameters``.
-            The schema is defined as an OpenAPI 3.0.2 `Schema
-            Object <https://tinyurl.com/y538mdwt#schema-object>`__.
-            AutoML Models always have this field populated by AI
-            Platform, if no parameters are supported it is set to an
-            empty string. Note: The URI given on output will be
-            immutable and probably different, including the URI scheme,
-            than the one given on input. The output URI will point to a
-            location where the user only has a read access.
+        Storage describing the parameters of prediction and
+        explanation via
+        ``PredictRequest.parameters``,
+        ``ExplainRequest.parameters``
+        and
+        ``BatchPredictionJob.model_parameters``.
+        The schema is defined as an OpenAPI 3.0.2 `Schema
+        Object <https://tinyurl.com/y538mdwt#schema-object>`__.
+        AutoML Models always have this field populated by AI
+        Platform, if no parameters are supported it is set to an
+        empty string. Note: The URI given on output will be
+        immutable and probably different, including the URI scheme,
+        than the one given on input. The output URI will point to a
+        location where the user only has a read access.
     :param model_prediction_schema_uri: Optional. Points to a YAML file stored on Google Cloud
-            Storage describing the format of a single prediction
-            produced by this Model, which are returned via
-            ``PredictResponse.predictions``,
-            ``ExplainResponse.explanations``,
-            and
-            ``BatchPredictionJob.output_config``.
-            The schema is defined as an OpenAPI 3.0.2 `Schema
-            Object <https://tinyurl.com/y538mdwt#schema-object>`__.
-            AutoML Models always have this field populated by AI
-            Platform. Note: The URI given on output will be immutable
-            and probably different, including the URI scheme, than the
-            one given on input. The output URI will point to a location
-            where the user only has a read access.
+        Storage describing the format of a single prediction
+        produced by this Model, which are returned via
+        ``PredictResponse.predictions``,
+        ``ExplainResponse.explanations``,
+        and
+        ``BatchPredictionJob.output_config``.
+        The schema is defined as an OpenAPI 3.0.2 `Schema
+        Object <https://tinyurl.com/y538mdwt#schema-object>`__.
+        AutoML Models always have this field populated by AI
+        Platform. Note: The URI given on output will be immutable
+        and probably different, including the URI scheme, than the
+        one given on input. The output URI will point to a location
+        where the user only has a read access.
+    :param parent_model: Optional. The resource name or model ID of an existing model.
+        The new model uploaded by this job will be a version of `parent_model`.
+        Only set this field when training a new version of an existing model.
+    :param is_default_version: Optional. When set to True, the newly uploaded model version will
+        automatically have alias "default" included. Subsequent uses of
+        the model produced by this job without a version specified will
+        use this "default" version.
+        When set to False, the "default" alias will not be moved.
+        Actions targeting the model version produced by this job will need
+        to specifically reference this version by ID or alias.
+        New model uploads, i.e. version 1, will always be "default" aliased.
+    :param model_version_aliases: Optional. User provided version aliases so that the model version
+        uploaded by this job can be referenced via alias instead of
+        auto-generated version ID. A default version alias will be created
+        for the first version of the model.
+        The format is [a-z][a-zA-Z0-9-]{0,126}[a-z0-9]
+    :param model_version_description: Optional. The description of the model version
+        being uploaded by this job.
     :param project_id: Project to run training in.
     :param region: Location to run training in.
     :param labels: Optional. The labels with user-defined metadata to
-            organize TrainingPipelines.
-            Label keys and values can be no longer than 64
-            characters, can only
-            contain lowercase letters, numeric characters,
-            underscores and dashes. International characters
-            are allowed.
-            See https://goo.gl/xmQnxf for more information
-            and examples of labels.
+        organize TrainingPipelines.
+        Label keys and values can be no longer than 64
+        characters, can only
+        contain lowercase letters, numeric characters,
+        underscores and dashes. International characters
+        are allowed.
+        See https://goo.gl/xmQnxf for more information
+        and examples of labels.
     :param training_encryption_spec_key_name: Optional. The Cloud KMS resource identifier of the customer
-            managed encryption key used to protect the training pipeline. Has the
-            form:
-            ``projects/my-project/locations/my-region/keyRings/my-kr/cryptoKeys/my-key``.
-            The key needs to be in the same region as where the compute
-            resource is created.
+        managed encryption key used to protect the training pipeline. Has the
+        form:
+        ``projects/my-project/locations/my-region/keyRings/my-kr/cryptoKeys/my-key``.
+        The key needs to be in the same region as where the compute
+        resource is created.
 
-            If set, this TrainingPipeline will be secured by this key.
+        If set, this TrainingPipeline will be secured by this key.
 
-            Note: Model trained by this TrainingPipeline is also secured
-            by this key if ``model_to_upload`` is not set separately.
+        Note: Model trained by this TrainingPipeline is also secured
+        by this key if ``model_to_upload`` is not set separately.
     :param model_encryption_spec_key_name: Optional. The Cloud KMS resource identifier of the customer
-            managed encryption key used to protect the model. Has the
-            form:
-            ``projects/my-project/locations/my-region/keyRings/my-kr/cryptoKeys/my-key``.
-            The key needs to be in the same region as where the compute
-            resource is created.
+        managed encryption key used to protect the model. Has the
+        form:
+        ``projects/my-project/locations/my-region/keyRings/my-kr/cryptoKeys/my-key``.
+        The key needs to be in the same region as where the compute
+        resource is created.
 
-            If set, the trained Model will be secured by this key.
+        If set, the trained Model will be secured by this key.
     :param staging_bucket: Bucket used to stage source and training artifacts.
     :param dataset: Vertex AI to fit this training against.
     :param annotation_schema_uri: Google Cloud Storage URI points to a YAML file describing
@@ -1103,9 +1165,6 @@ class CreateCustomTrainingJobOperator(CustomTrainingJobBaseOperator):
             will be executed in concurrent Future and any downstream object will
             be immediately returned and synced when the Future has completed.
     :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -1119,6 +1178,7 @@ class CreateCustomTrainingJobOperator(CustomTrainingJobBaseOperator):
     template_fields = (
         "region",
         "script_path",
+        "parent_model",
         "requirements",
         "dataset_id",
         "impersonation_chain",
@@ -1139,9 +1199,10 @@ class CreateCustomTrainingJobOperator(CustomTrainingJobBaseOperator):
     def execute(self, context: Context):
         self.hook = CustomJobHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
+        self.parent_model = self.parent_model.rpartition("@")[0] if self.parent_model else None
+
         model, training_id, custom_job_id = self.hook.create_custom_training_job(
             project_id=self.project_id,
             region=self.region,
@@ -1160,6 +1221,10 @@ class CreateCustomTrainingJobOperator(CustomTrainingJobBaseOperator):
             model_instance_schema_uri=self.model_instance_schema_uri,
             model_parameters_schema_uri=self.model_parameters_schema_uri,
             model_prediction_schema_uri=self.model_prediction_schema_uri,
+            parent_model=self.parent_model,
+            is_default_version=self.is_default_version,
+            model_version_aliases=self.model_version_aliases,
+            model_version_description=self.model_version_description,
             labels=self.labels,
             training_encryption_spec_key_name=self.training_encryption_spec_key_name,
             model_encryption_spec_key_name=self.model_encryption_spec_key_name,
@@ -1196,6 +1261,7 @@ class CreateCustomTrainingJobOperator(CustomTrainingJobBaseOperator):
         if model:
             result = Model.to_dict(model)
             model_id = self.hook.extract_model_id(result)
+            self.xcom_push(context, key="model_id", value=model_id)
             VertexAIModelLink.persist(context=context, task_instance=self, model_id=model_id)
         else:
             result = model  # type: ignore
@@ -1205,16 +1271,14 @@ class CreateCustomTrainingJobOperator(CustomTrainingJobBaseOperator):
         return result
 
     def on_kill(self) -> None:
-        """
-        Callback called when the operator is killed.
-        Cancel any running job.
-        """
+        """Callback called when the operator is killed; cancel any running job."""
         if self.hook:
             self.hook.cancel_job()
 
 
-class DeleteCustomTrainingJobOperator(BaseOperator):
-    """Deletes a CustomTrainingJob, CustomPythonTrainingJob, or CustomContainerTrainingJob.
+class DeleteCustomTrainingJobOperator(GoogleCloudBaseOperator):
+    """
+    Deletes a CustomTrainingJob, CustomPythonTrainingJob, or CustomContainerTrainingJob.
 
     :param training_pipeline_id: Required. The name of the TrainingPipeline resource to be deleted.
     :param custom_job_id: Required. The name of the CustomJob to delete.
@@ -1224,9 +1288,6 @@ class DeleteCustomTrainingJobOperator(BaseOperator):
     :param timeout: The timeout for this request.
     :param metadata: Strings which should be sent along with the request as metadata.
     :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -1250,7 +1311,6 @@ class DeleteCustomTrainingJobOperator(BaseOperator):
         timeout: float | None = None,
         metadata: Sequence[tuple[str, str]] = (),
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         **kwargs,
     ) -> None:
@@ -1263,13 +1323,11 @@ class DeleteCustomTrainingJobOperator(BaseOperator):
         self.timeout = timeout
         self.metadata = metadata
         self.gcp_conn_id = gcp_conn_id
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
 
     def execute(self, context: Context):
         hook = CustomJobHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
         try:
@@ -1302,8 +1360,9 @@ class DeleteCustomTrainingJobOperator(BaseOperator):
             self.log.info("The Custom Job ID %s does not exist.", self.custom_job)
 
 
-class ListCustomTrainingJobOperator(BaseOperator):
-    """Lists CustomTrainingJob, CustomPythonTrainingJob, or CustomContainerTrainingJob in a Location.
+class ListCustomTrainingJobOperator(GoogleCloudBaseOperator):
+    """
+    Lists CustomTrainingJob, CustomPythonTrainingJob, or CustomContainerTrainingJob in a Location.
 
     :param project_id: Required. The ID of the Google Cloud project that the service belongs to.
     :param region: Required. The ID of the Google Cloud region that the service belongs to.
@@ -1333,9 +1392,6 @@ class ListCustomTrainingJobOperator(BaseOperator):
     :param timeout: The timeout for this request.
     :param metadata: Strings which should be sent along with the request as metadata.
     :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -1368,7 +1424,6 @@ class ListCustomTrainingJobOperator(BaseOperator):
         timeout: float | None = None,
         metadata: Sequence[tuple[str, str]] = (),
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         **kwargs,
     ) -> None:
@@ -1383,13 +1438,11 @@ class ListCustomTrainingJobOperator(BaseOperator):
         self.timeout = timeout
         self.metadata = metadata
         self.gcp_conn_id = gcp_conn_id
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
 
     def execute(self, context: Context):
         hook = CustomJobHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
         results = hook.list_training_pipelines(

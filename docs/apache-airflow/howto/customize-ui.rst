@@ -43,7 +43,6 @@ following steps:
           "restarting": "violet",
           "running": "#01FF70",
           "scheduled": "tan",
-          "shutdown": "blue",
           "skipped": "darkorchid",
           "success": "#2ECC40",
           "up_for_reschedule": "turquoise",
@@ -79,7 +78,7 @@ After
 
 .. note::
 
-    See :doc:`../modules_management` for details on how Python and Airflow manage modules.
+    See :doc:`/administration-and-deployment/modules_management` for details on how Python and Airflow manage modules.
 
 Customizing DAG UI Header and Airflow Page Titles
 -------------------------------------------------

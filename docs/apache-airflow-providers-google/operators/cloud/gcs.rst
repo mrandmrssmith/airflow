@@ -24,37 +24,15 @@ Cloud Storage allows world-wide storage and retrieval of any amount of data at a
 You can use Cloud Storage for a range of scenarios including serving website content,
 storing data for archival and disaster recovery, or distributing large data objects to users via direct download.
 
+See :doc:`/operators/transfer/index` for a list of specialized transfer operators to and from Google Cloud Storage.
+
 Prerequisite Tasks
 ^^^^^^^^^^^^^^^^^^
 
-.. include::/operators/_partials/prerequisite_tasks.rst
+.. include:: /operators/_partials/prerequisite_tasks.rst
 
 Operators
 ^^^^^^^^^
-
-.. _howto/operator:GCSToBigQueryOperator:
-
-GCSToBigQueryOperator
----------------------
-
-Use the
-:class:`~airflow.providers.google.cloud.transfers.gcs_to_bigquery.GCSToBigQueryOperator`
-to execute a BigQuery load job to load existing dataset from Google Cloud Storage to BigQuery table.
-
-.. exampleinclude:: /../../tests/system/providers/google/cloud/gcs/example_gcs_to_bigquery.py
-    :language: python
-    :dedent: 4
-    :start-after: [START howto_operator_gcs_to_bigquery]
-    :end-before: [END howto_operator_gcs_to_bigquery]
-
-Also you can use GCSToBigQueryOperator in the deferrable mode:
-
-.. exampleinclude:: /../../tests/system/providers/google/cloud/gcs/example_gcs_to_bigquery_async.py
-    :language: python
-    :dedent: 4
-    :start-after: [START howto_operator_gcs_to_bigquery_async]
-    :end-before: [END howto_operator_gcs_to_bigquery_async]
-
 
 .. _howto/operator:GCSTimeSpanFileTransformOperator:
 
@@ -188,6 +166,28 @@ Use the :class:`~airflow.providers.google.cloud.sensors.gcs.GCSObjectExistenceSe
     :start-after: [START howto_sensor_object_exists_task]
     :end-before: [END howto_sensor_object_exists_task]
 
+Also you can use deferrable mode in this operator if you would like to free up the worker slots while the sensor is running.
+
+.. exampleinclude:: /../../tests/system/providers/google/cloud/gcs/example_gcs_sensor.py
+    :language: python
+    :dedent: 4
+    :start-after: [START howto_sensor_object_exists_task_defered]
+    :end-before: [END howto_sensor_object_exists_task_defered]
+
+.. _howto/sensor:GCSObjectExistenceAsyncSensor:
+
+GCSObjectExistenceAsyncSensor
+-----------------------------
+
+:class:`~airflow.providers.google.cloud.sensors.gcs.GCSObjectExistenceAsyncSensor` is deprecated and will be removed in a future release. Please use :class:`~airflow.providers.google.cloud.sensors.gcs.GCSObjectExistenceSensor` and use the deferrable mode in that operator.
+
+.. exampleinclude:: /../../tests/system/providers/google/cloud/gcs/example_gcs_sensor.py
+    :language: python
+    :dedent: 4
+    :start-after: [START howto_sensor_object_exists_task_async]
+    :end-before: [END howto_sensor_object_exists_task_async]
+
+
 .. _howto/sensor:GCSObjectsWithPrefixExistenceSensor:
 
 GCSObjectsWithPrefixExistenceSensor
@@ -201,7 +201,19 @@ Use the :class:`~airflow.providers.google.cloud.sensors.gcs.GCSObjectsWithPrefix
     :start-after: [START howto_sensor_object_with_prefix_exists_task]
     :end-before: [END howto_sensor_object_with_prefix_exists_task]
 
+You can set the ``deferrable`` param to True if you want this sensor to run asynchronously, leading to more
+efficient utilization of resources in your Airflow deployment. However the triggerer component needs to be enabled
+for this functionality to work.
+
+.. exampleinclude:: /../../tests/system/providers/google/cloud/gcs/example_gcs_sensor.py
+    :language: python
+    :dedent: 4
+    :start-after: [START howto_sensor_object_with_prefix_exists_task_async]
+    :end-before: [END howto_sensor_object_with_prefix_exists_task_async]
+
+
 .. _howto/sensor:GCSUploadSessionCompleteSensor:
+
 
 GCSUploadSessionCompleteSensor
 ------------------------------
@@ -213,6 +225,15 @@ Use the :class:`~airflow.providers.google.cloud.sensors.gcs.GCSUploadSessionComp
     :dedent: 4
     :start-after: [START howto_sensor_gcs_upload_session_complete_task]
     :end-before: [END howto_sensor_gcs_upload_session_complete_task]
+
+You can set the parameter ``deferrable`` to True if you want the worker slots to be freed up while sensor is running.
+
+
+.. exampleinclude:: /../../tests/system/providers/google/cloud/gcs/example_gcs_sensor.py
+    :language: python
+    :dedent: 4
+    :start-after: [START howto_sensor_gcs_upload_session_async_task]
+    :end-before: [END howto_sensor_gcs_upload_session_async_task]
 
 .. _howto/sensor:GCSObjectUpdateSensor:
 
@@ -226,6 +247,16 @@ Use the :class:`~airflow.providers.google.cloud.sensors.gcs.GCSObjectUpdateSenso
     :dedent: 4
     :start-after: [START howto_sensor_object_update_exists_task]
     :end-before: [END howto_sensor_object_update_exists_task]
+
+You can set the ``deferrable`` param to True if you want this sensor to run asynchronously, leading to efficient
+utilization of resources in your Airflow deployment. However the triggerer component needs to be enabled
+for this functionality to work.
+
+.. exampleinclude:: /../../tests/system/providers/google/cloud/gcs/example_gcs_sensor.py
+    :language: python
+    :dedent: 4
+    :start-after: [START howto_sensor_object_update_exists_task_async]
+    :end-before: [END howto_sensor_object_update_exists_task_async]
 
 More information
 """"""""""""""""

@@ -23,15 +23,27 @@ from airflow.providers.amazon.aws.hooks.base_aws import AwsBaseHook
 
 
 class GlacierHook(AwsBaseHook):
-    """Hook for connection with Amazon Glacier"""
+    """Interact with Amazon Glacier.
 
-    def __init__(self, aws_conn_id: str = "aws_default") -> None:
-        super().__init__(client_type="glacier")
-        self.aws_conn_id = aws_conn_id
+    This is a thin wrapper around
+    :external+boto3:py:class:`boto3.client("glacier") <Glacier.Client>`.
+
+    Additional arguments (such as ``aws_conn_id``) may be specified and
+    are passed down to the underlying AwsBaseHook.
+
+    .. seealso::
+        - :class:`airflow.providers.amazon.aws.hooks.base_aws.AwsBaseHook`
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        kwargs.update({"client_type": "glacier", "resource_type": None})
+        super().__init__(*args, **kwargs)
 
     def retrieve_inventory(self, vault_name: str) -> dict[str, Any]:
-        """
-        Initiate an Amazon Glacier inventory-retrieval job
+        """Initiate an Amazon Glacier inventory-retrieval job.
+
+        .. seealso::
+            - :external+boto3:py:meth:`Glacier.Client.initiate_job`
 
         :param vault_name: the Glacier vault on which job is executed
         """
@@ -43,8 +55,10 @@ class GlacierHook(AwsBaseHook):
         return response
 
     def retrieve_inventory_results(self, vault_name: str, job_id: str) -> dict[str, Any]:
-        """
-        Retrieve the results of an Amazon Glacier inventory-retrieval job
+        """Retrieve the results of an Amazon Glacier inventory-retrieval job.
+
+        .. seealso::
+            - :external+boto3:py:meth:`Glacier.Client.get_job_output`
 
         :param vault_name: the Glacier vault on which job is executed
         :param job_id: the job ID was returned by retrieve_inventory()
@@ -54,9 +68,10 @@ class GlacierHook(AwsBaseHook):
         return response
 
     def describe_job(self, vault_name: str, job_id: str) -> dict[str, Any]:
-        """
-        Retrieve the status of an Amazon S3 Glacier job, such as an
-        inventory-retrieval job
+        """Retrieve the status of an Amazon S3 Glacier job.
+
+        .. seealso::
+            - :external+boto3:py:meth:`Glacier.Client.describe_job`
 
         :param vault_name: the Glacier vault on which job is executed
         :param job_id: the job ID was returned by retrieve_inventory()

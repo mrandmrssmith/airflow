@@ -41,7 +41,17 @@ class BaseHook(LoggingMixin):
     object that can handle the connection and interaction to specific
     instances of these systems, and expose consistent methods to interact
     with them.
+
+    :param logger_name: Name of the logger used by the Hook to emit logs.
+        If set to `None` (default), the logger name will fall back to
+        `airflow.task.hooks.{class.__module__}.{class.__name__}` (e.g. DbApiHook will have
+        *airflow.task.hooks.airflow.providers.common.sql.hooks.sql.DbApiHook* as logger).
     """
+
+    def __init__(self, logger_name: str | None = None):
+        super().__init__()
+        self._log_config_logger_name = "airflow.task.hooks"
+        self._logger_name = logger_name
 
     @classmethod
     def get_connections(cls, conn_id: str) -> list[Connection]:
@@ -76,27 +86,25 @@ class BaseHook(LoggingMixin):
     @classmethod
     def get_hook(cls, conn_id: str) -> BaseHook:
         """
-        Returns default hook for this connection id.
+        Return default hook for this connection id.
 
         :param conn_id: connection id
         :return: default hook for this connection
         """
-        # TODO: set method return type to BaseHook class when on 3.7+.
-        #  See https://stackoverflow.com/a/33533514/3066428
         connection = cls.get_connection(conn_id)
         return connection.get_hook()
 
     def get_conn(self) -> Any:
-        """Returns connection for the hook."""
+        """Return connection for the hook."""
         raise NotImplementedError()
 
     @classmethod
     def get_connection_form_widgets(cls) -> dict[str, Any]:
-        ...
+        return {}
 
     @classmethod
     def get_ui_field_behaviour(cls) -> dict[str, Any]:
-        ...
+        return {}
 
 
 class DiscoverableHook(Protocol):
@@ -146,7 +154,7 @@ class DiscoverableHook(Protocol):
     @staticmethod
     def get_connection_form_widgets() -> dict[str, Any]:
         """
-        Returns dictionary of widgets to be added for the hook to handle extra values.
+        Return dictionary of widgets to be added for the hook to handle extra values.
 
         If you have class hierarchy, usually the widgets needed by your class are already
         added by the base class, so there is no need to implement this method. It might

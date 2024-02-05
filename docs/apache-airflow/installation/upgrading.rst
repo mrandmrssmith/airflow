@@ -15,15 +15,20 @@
     specific language governing permissions and limitations
     under the License.
 
-Upgrading Airflow to a newer version
-------------------------------------
+Upgrading Airflow™ to a newer version
+-------------------------------------
 
 Why you need to upgrade
 =======================
 
-Newer Airflow versions can contain database migrations so you must run ``airflow db upgrade``
-to upgrade your database with the schema changes in the Airflow version you are upgrading to.
+Newer Airflow versions can contain database migrations so you must run ``airflow db migrate``
+to migrate your database with the schema changes in the Airflow version you are upgrading to.
 Don't worry, it's safe to run even if there are no migrations to perform.
+
+What are the changes between Airflow version x and y?
+=====================================================
+
+The :doc:`release notes <../release_notes>` lists the changes that were included in any given Airflow release.
 
 Upgrade preparation - make a backup of DB
 =========================================
@@ -41,7 +46,7 @@ When you need to upgrade
 ========================
 
 If you have a custom deployment based on virtualenv or Docker Containers, you usually need to run
-the DB upgrade manually as part of the upgrade process.
+the DB migrate manually as part of the upgrade process.
 
 In some cases the upgrade happens automatically - it depends if in your deployment, the upgrade is
 built-in as post-install action. For example when you are using :doc:`helm-chart:index` with
@@ -52,19 +57,27 @@ when you choose to upgrade airflow via their UI.
 How to upgrade
 ==============
 
-In order to manually upgrade the database you should run the ``airflow db upgrade`` command in your
+In order to manually migrate the database you should run the ``airflow db migrate`` command in your
 environment. It can be run either in your virtual environment or in the containers that give
-you access to Airflow ``CLI`` :doc:`/usage-cli` and the database.
+you access to Airflow ``CLI`` :doc:`/howto/usage-cli` and the database.
 
 Offline SQL migration scripts
 =============================
 If you want to run the upgrade script offline, you can use the ``-r`` or ``--revision-range`` flag
 to get the SQL statements that would be executed. This feature is supported in Postgres and MySQL
-from Airflow 2.0.0 onward and in MSSQL from Airflow 2.2.0 onward.
+from Airflow 2.0.0 onward.
 
 Sample usage:
-   ``airflow db upgrade -r "2.0.0:2.2.0"``
-   ``airflow db upgrade --revision-range "e959f08ac86c:142555e44c17"``
+   ``airflow db migrate -r "2.0.0:2.2.0"``
+   ``airflow db migrate --revision-range "e959f08ac86c:142555e44c17"``
+
+But for Airflow version 2.7.0 or greater, please use
+    ``airflow db migrate -r "2.0.0:2.2.0"``
+    ``airflow db migrate --revision-range "e959f08ac86c:142555e44c17"``
+
+.. note::
+    ``airflow db upgrade`` has been replaced by ``airflow db migrate`` since Airflow version 2.7.0
+    and former has been deprecated.
 
 
 Handling migration problems
@@ -81,7 +94,7 @@ The next chapter describes how to fix the problem manually.
 
 
 Why you might get the error? The recommended character set/collation for MySQL 8 database is
-``utf8mb4`` and ``utf8mb4_bin`` respectively. However this has been changing in different versions of
+``utf8mb4`` and ``utf8mb4_bin`` respectively. However, this has been changing in different versions of
 MySQL and you could have custom created database with a different character set. If your database
 was created with an old version of Airflow or MySQL, the encoding could have been wrong when the database
 was created or broken during migration.
@@ -167,26 +180,26 @@ wrong encoding (here are all potential commands you might need to use):
 
 .. code-block:: sql
 
-    ALTER TABLE task_instance MODIFY task_id VARCHAR(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
-    ALTER TABLE task_reschedule MODIFY task_id VARCHAR(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+    ALTER TABLE task_instance MODIFY task_id VARCHAR(250) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+    ALTER TABLE task_reschedule MODIFY task_id VARCHAR(250) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
 
-    ALTER TABLE rendered_task_instance_fields MODIFY task_id VARCHAR(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
-    ALTER TABLE rendered_task_instance_fields MODIFY dag_id VARCHAR(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+    ALTER TABLE rendered_task_instance_fields MODIFY task_id VARCHAR(250) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+    ALTER TABLE rendered_task_instance_fields MODIFY dag_id VARCHAR(250) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
 
-    ALTER TABLE task_fail MODIFY task_id VARCHAR(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
-    ALTER TABLE task_fail MODIFY dag_id VARCHAR(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+    ALTER TABLE task_fail MODIFY task_id VARCHAR(250) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+    ALTER TABLE task_fail MODIFY dag_id VARCHAR(250) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
 
-    ALTER TABLE sla_miss MODIFY task_id VARCHAR(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
-    ALTER TABLE sla_miss MODIFY dag_id VARCHAR(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+    ALTER TABLE sla_miss MODIFY task_id VARCHAR(250) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+    ALTER TABLE sla_miss MODIFY dag_id VARCHAR(250) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
 
-    ALTER TABLE task_map MODIFY task_id VARCHAR(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
-    ALTER TABLE task_map MODIFY dag_id VARCHAR(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
-    ALTER TABLE task_map MODIFY run_id VARCHAR(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+    ALTER TABLE task_map MODIFY task_id VARCHAR(250) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+    ALTER TABLE task_map MODIFY dag_id VARCHAR(250) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+    ALTER TABLE task_map MODIFY run_id VARCHAR(250) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
 
-    ALTER TABLE xcom MODIFY task_id VARCHAR(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
-    ALTER TABLE xcom MODIFY dag_id VARCHAR(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
-    ALTER TABLE xcom MODIFY run_id VARCHAR(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
-    ALTER TABLE xcom MODIFY key VARCHAR(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+    ALTER TABLE xcom MODIFY task_id VARCHAR(250) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+    ALTER TABLE xcom MODIFY dag_id VARCHAR(250) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+    ALTER TABLE xcom MODIFY run_id VARCHAR(250) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+    ALTER TABLE xcom MODIFY key VARCHAR(250) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
 
 5. Recreate the foreign keys dropped in step 3.
 
@@ -208,7 +221,7 @@ Airflow version.
 Post-upgrade warnings
 .....................
 
-Typically you just need to successfully run ``airflow db upgrade`` command and this is all. However in
+Typically you just need to successfully run ``airflow db migrate`` command and this is all. However, in
 some cases, the migration might find some old, stale and probably wrong data in your database and moves it
 aside to a separate table. In this case you might get warning in your webserver UI about the data found.
 
@@ -222,7 +235,7 @@ Typical message that you might see:
 When you see such message, it means that some of your data was corrupted and you should inspect it
 to determine whether you would like to keep or delete some of that data. Most likely the data was corrupted
 and left-over from some bugs and can be safely deleted - because this data would not be anyhow visible
-and useful in Airflow. However if you have particular need for auditing or historical reasons you might
+and useful in Airflow. However, if you have particular need for auditing or historical reasons you might
 choose to store it somewhere. Unless you have specific reasons to keep the data most likely deleting it
 is your best option.
 

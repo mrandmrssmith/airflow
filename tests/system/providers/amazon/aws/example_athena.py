@@ -20,9 +20,9 @@ from datetime import datetime
 
 import boto3
 
-from airflow import DAG
 from airflow.decorators import task
 from airflow.models.baseoperator import chain
+from airflow.models.dag import DAG
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.providers.amazon.aws.operators.athena import AthenaOperator
 from airflow.providers.amazon.aws.operators.s3 import (
@@ -102,6 +102,7 @@ with DAG(
         query=query_create_database,
         database=athena_database,
         output_location=f"s3://{s3_bucket}/",
+        sleep_time=1,
     )
 
     create_table = AthenaOperator(
@@ -109,6 +110,7 @@ with DAG(
         query=query_create_table,
         database=athena_database,
         output_location=f"s3://{s3_bucket}/",
+        sleep_time=1,
     )
 
     # [START howto_operator_athena]
@@ -119,6 +121,7 @@ with DAG(
         output_location=f"s3://{s3_bucket}/",
     )
     # [END howto_operator_athena]
+    read_table.sleep_time = 1
 
     # [START howto_sensor_athena]
     await_query = AthenaSensor(
@@ -133,6 +136,7 @@ with DAG(
         database=athena_database,
         output_location=f"s3://{s3_bucket}/",
         trigger_rule=TriggerRule.ALL_DONE,
+        sleep_time=1,
     )
 
     drop_database = AthenaOperator(
@@ -141,6 +145,7 @@ with DAG(
         database=athena_database,
         output_location=f"s3://{s3_bucket}/",
         trigger_rule=TriggerRule.ALL_DONE,
+        sleep_time=1,
     )
 
     delete_s3_bucket = S3DeleteBucketOperator(

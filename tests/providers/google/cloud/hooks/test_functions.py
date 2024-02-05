@@ -17,7 +17,6 @@
 # under the License.
 from __future__ import annotations
 
-import unittest
 from unittest import mock
 from unittest.mock import PropertyMock
 
@@ -36,8 +35,12 @@ GCF_LOCATION = "location"
 GCF_FUNCTION = "function"
 
 
-class TestFunctionHookNoDefaultProjectId(unittest.TestCase):
-    def setUp(self):
+class TestFunctionHookNoDefaultProjectId:
+    def test_delegate_to_runtime_error(self):
+        with pytest.raises(RuntimeError):
+            CloudFunctionsHook(api_version="v1", gcp_conn_id="GCP_CONN_ID", delegate_to="delegate_to")
+
+    def setup_method(self):
         with mock.patch(
             "airflow.providers.google.common.hooks.base_google.GoogleBaseHook.__init__",
             new=mock_base_gcp_hook_no_default_project_id,
@@ -78,10 +81,8 @@ class TestFunctionHookNoDefaultProjectId(unittest.TestCase):
     def test_upload_function_zip_overridden_project_id(self, get_conn, requests_put):
         mck, open_module = get_open_mock()
         with mock.patch(f"{open_module}.open", mck):
-            # fmt: off
-            generate_upload_url_method = get_conn.return_value.projects.return_value.locations. \
-                return_value.functions.return_value.generateUploadUrl
-            # fmt: on
+            generate_upload_url_method = get_conn.return_value.projects.return_value.locations.return_value.functions.return_value.generateUploadUrl
+
             execute_method = generate_upload_url_method.return_value.execute
             execute_method.return_value = {"uploadUrl": "http://uploadHere"}
             requests_put.return_value = None
@@ -100,8 +101,8 @@ class TestFunctionHookNoDefaultProjectId(unittest.TestCase):
             )
 
 
-class TestFunctionHookDefaultProjectId(unittest.TestCase):
-    def setUp(self):
+class TestFunctionHookDefaultProjectId:
+    def setup_method(self):
         with mock.patch(
             "airflow.providers.google.common.hooks.base_google.GoogleBaseHook.__init__",
             new=mock_base_gcp_hook_default_project_id,
@@ -219,10 +220,8 @@ class TestFunctionHookDefaultProjectId(unittest.TestCase):
     def test_upload_function_zip(self, get_conn, requests_put, mock_project_id):
         mck, open_module = get_open_mock()
         with mock.patch(f"{open_module}.open", mck):
-            # fmt: off
-            generate_upload_url_method = get_conn.return_value.projects.return_value.locations. \
-                return_value.functions.return_value.generateUploadUrl
-            # fmt: on
+            generate_upload_url_method = get_conn.return_value.projects.return_value.locations.return_value.functions.return_value.generateUploadUrl
+
             execute_method = generate_upload_url_method.return_value.execute
             execute_method.return_value = {"uploadUrl": "http://uploadHere"}
             requests_put.return_value = None
@@ -247,10 +246,8 @@ class TestFunctionHookDefaultProjectId(unittest.TestCase):
     def test_upload_function_zip_overridden_project_id(self, get_conn, requests_put):
         mck, open_module = get_open_mock()
         with mock.patch(f"{open_module}.open", mck):
-            # fmt: off
-            generate_upload_url_method = get_conn.return_value.projects.return_value.locations. \
-                return_value.functions.return_value.generateUploadUrl
-            # fmt: on
+            generate_upload_url_method = get_conn.return_value.projects.return_value.locations.return_value.functions.return_value.generateUploadUrl
+
             execute_method = generate_upload_url_method.return_value.execute
             execute_method.return_value = {"uploadUrl": "http://uploadHere"}
             requests_put.return_value = None
@@ -271,10 +268,9 @@ class TestFunctionHookDefaultProjectId(unittest.TestCase):
     @mock.patch("airflow.providers.google.cloud.hooks.functions.CloudFunctionsHook.get_conn")
     def test_call_function(self, mock_get_conn):
         payload = {"executionId": "wh41ppcyoa6l", "result": "Hello World!"}
-        # fmt: off
-        call = mock_get_conn.return_value.projects.return_value. \
-            locations.return_value.functions.return_value.call
-        # fmt: on
+
+        call = mock_get_conn.return_value.projects.return_value.locations.return_value.functions.return_value.call
+
         call.return_value.execute.return_value = payload
 
         function_id = "function1234"
@@ -294,10 +290,9 @@ class TestFunctionHookDefaultProjectId(unittest.TestCase):
     @mock.patch("airflow.providers.google.cloud.hooks.functions.CloudFunctionsHook.get_conn")
     def test_call_function_error(self, mock_get_conn):
         payload = {"error": "Something very bad"}
-        # fmt: off
-        call = mock_get_conn.return_value.projects.return_value. \
-            locations.return_value.functions.return_value.call
-        # fmt: on
+
+        call = mock_get_conn.return_value.projects.return_value.locations.return_value.functions.return_value.call
+
         call.return_value.execute.return_value = payload
 
         function_id = "function1234"

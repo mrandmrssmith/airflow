@@ -29,7 +29,7 @@ Airflow provides operators to create and interact with SageMaker Jobs and Pipeli
 Prerequisite Tasks
 ------------------
 
-.. include:: _partials/prerequisite_tasks.rst
+.. include:: ../_partials/prerequisite_tasks.rst
 
 Operators
 ---------
@@ -154,7 +154,7 @@ Start an Amazon SageMaker pipeline execution
 To trigger an execution run for an already-defined Amazon Sagemaker pipeline, you can use
 :class:`~airflow.providers.amazon.aws.operators.sagemaker.SageMakerStartPipelineOperator`.
 
-.. exampleinclude:: /../../tests/system/providers/amazon/aws/example_sagemaker.py
+.. exampleinclude:: /../../tests/system/providers/amazon/aws/example_sagemaker_pipeline.py
     :language: python
     :dedent: 4
     :start-after: [START howto_operator_sagemaker_start_pipeline]
@@ -168,11 +168,116 @@ Stop an Amazon SageMaker pipeline execution
 To stop an Amazon Sagemaker pipeline execution that is currently running, you can use
 :class:`~airflow.providers.amazon.aws.operators.sagemaker.SageMakerStopPipelineOperator`.
 
-.. exampleinclude:: /../../tests/system/providers/amazon/aws/example_sagemaker.py
+.. exampleinclude:: /../../tests/system/providers/amazon/aws/example_sagemaker_pipeline.py
     :language: python
     :dedent: 4
     :start-after: [START howto_operator_sagemaker_stop_pipeline]
     :end-before: [END howto_operator_sagemaker_stop_pipeline]
+
+.. _howto/operator:SageMakerRegisterModelVersionOperator:
+
+Register a Sagemaker Model Version
+==================================
+
+To register a model version, you can use :class:`~airflow.providers.amazon.aws.operators.sagemaker.SageMakerRegisterModelVersionOperator`.
+The result of executing this operator is a model package.
+A model package is a reusable model artifacts abstraction that packages all ingredients necessary for inference.
+It consists of an inference specification that defines the inference image to use along with a model weights location.
+A model package group is a collection of model packages.
+You can use this operator to add a new version and model package to the group for every DAG run.
+
+.. exampleinclude:: /../../tests/system/providers/amazon/aws/example_sagemaker.py
+    :language: python
+    :dedent: 4
+    :start-after: [START howto_operator_sagemaker_register]
+    :end-before: [END howto_operator_sagemaker_register]
+
+.. _howto/operator:SageMakerAutoMLOperator:
+
+Launch an AutoML experiment
+===========================
+
+To launch an AutoML experiment, a.k.a. SageMaker Autopilot, you can use :class:`~airflow.providers.amazon.aws.operators.sagemaker.SageMakerAutoMLOperator`.
+An AutoML experiment will take some input data in CSV and the column it should learn to predict,
+and train models on it without needing human supervision.
+The output is placed in an S3 bucket, and automatically deployed if configured for it.
+
+.. exampleinclude:: /../../tests/system/providers/amazon/aws/example_sagemaker.py
+    :language: python
+    :dedent: 4
+    :start-after: [START howto_operator_sagemaker_auto_ml]
+    :end-before: [END howto_operator_sagemaker_auto_ml]
+
+.. _howto/operator:SageMakerCreateExperimentOperator:
+
+Create an Experiment for later use
+==================================
+
+To create a SageMaker experiment, you can use :class:`~airflow.providers.amazon.aws.operators.sagemaker.SageMakerCreateExperimentOperator`.
+This creates an experiment so that it's ready to be associated with processing, training and transform jobs.
+
+.. exampleinclude:: /../../tests/system/providers/amazon/aws/example_sagemaker.py
+    :language: python
+    :dedent: 4
+    :start-after: [START howto_operator_sagemaker_experiment]
+    :end-before: [END howto_operator_sagemaker_experiment]
+
+.. _howto/operator:SageMakerCreateNotebookOperator:
+
+Create a SageMaker Notebook Instance
+====================================
+
+To create a SageMaker Notebook Instance , you can use :class:`~airflow.providers.amazon.aws.operators.sagemaker.SageMakerCreateNotebookOperator`.
+This creates a SageMaker Notebook Instance ready to run Jupyter notebooks.
+
+.. exampleinclude:: /../../tests/system/providers/amazon/aws/example_sagemaker_notebook.py
+    :language: python
+    :dedent: 4
+    :start-after: [START howto_operator_sagemaker_notebook_create]
+    :end-before: [END howto_operator_sagemaker_notebook_create]
+
+.. _howto/operator:SageMakerStopNotebookOperator:
+
+Stop a SageMaker Notebook Instance
+==================================
+
+To terminate SageMaker Notebook Instance , you can use :class:`~airflow.providers.amazon.aws.operators.sagemaker.SageMakerStopNotebookOperator`.
+This terminates the ML compute instance and disconnects the ML storage volume.
+
+.. exampleinclude:: /../../tests/system/providers/amazon/aws/example_sagemaker_notebook.py
+    :language: python
+    :dedent: 4
+    :start-after: [START howto_operator_sagemaker_notebook_stop]
+    :end-before: [END howto_operator_sagemaker_notebook_stop]
+
+.. _howto/operator:SageMakerStartNotebookOperator:
+
+Start a SageMaker Notebook Instance
+===================================
+
+To launch a SageMaker Notebook Instance and re-attach an ML storage volume, you can use :class:`~airflow.providers.amazon.aws.operators.sagemaker.SageMakerStartNotebookOperator`.
+This launches a new ML compute instance with the latest version of the libraries and attached your ML storage volume.
+
+.. exampleinclude:: /../../tests/system/providers/amazon/aws/example_sagemaker_notebook.py
+    :language: python
+    :dedent: 4
+    :start-after: [START howto_operator_sagemaker_notebook_start]
+    :end-before: [END howto_operator_sagemaker_notebook_start]
+
+
+.. _howto/operator:SageMakerDeleteNotebookOperator:
+
+Delete a SageMaker Notebook Instance
+====================================
+
+To delete a SageMaker Notebook Instance, you can use :class:`~airflow.providers.amazon.aws.operators.sagemaker.SageMakerDeleteNotebookOperator`.
+This terminates the instance and deletes the ML storage volume and network interface associated with the instance. The instance must be stopped before it can be deleted.
+
+.. exampleinclude:: /../../tests/system/providers/amazon/aws/example_sagemaker_notebook.py
+    :language: python
+    :dedent: 4
+    :start-after: [START howto_operator_sagemaker_notebook_delete]
+    :end-before: [END howto_operator_sagemaker_notebook_delete]
 
 Sensors
 -------
@@ -241,11 +346,25 @@ Wait on an Amazon SageMaker pipeline execution state
 To check the state of an Amazon Sagemaker pipeline execution until it reaches a terminal state
 you can use :class:`~airflow.providers.amazon.aws.sensors.sagemaker.SageMakerPipelineSensor`.
 
-.. exampleinclude:: /../../tests/system/providers/amazon/aws/example_sagemaker.py
+.. exampleinclude:: /../../tests/system/providers/amazon/aws/example_sagemaker_pipeline.py
     :language: python
     :dedent: 4
     :start-after: [START howto_sensor_sagemaker_pipeline]
     :end-before: [END howto_sensor_sagemaker_pipeline]
+
+.. _howto/sensor:SageMakerAutoMLSensor:
+
+Wait on an Amazon SageMaker AutoML experiment state
+===================================================
+
+To check the state of an Amazon Sagemaker AutoML job until it reaches a terminal state
+you can use :class:`~airflow.providers.amazon.aws.sensors.sagemaker.SageMakerAutoMLSensor`.
+
+.. exampleinclude:: /../../tests/system/providers/amazon/aws/example_sagemaker.py
+    :language: python
+    :dedent: 4
+    :start-after: [START howto_operator_sagemaker_auto_ml]
+    :end-before: [END howto_operator_sagemaker_auto_ml]
 
 Reference
 ---------

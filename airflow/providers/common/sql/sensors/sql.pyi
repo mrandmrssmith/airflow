@@ -18,7 +18,7 @@
 # This is automatically generated stub for the `common.sql` provider
 #
 # This file is generated automatically by the `update-common-sql-api stubs` pre-commit
-# and the .pyi file represents part of the the "public" API that the
+# and the .pyi file represents part of the "public" API that the
 # `common.sql` provider exposes to other providers.
 #
 # Any, potentially breaking change in the stubs will require deliberate manual action from the contributor
@@ -27,6 +27,10 @@
 #
 # You can read more in the README_API.md file
 #
+"""
+Definition of the public interface for airflow.providers.common.sql.sensors.sql
+isort:skip_file
+"""
 from _typeshed import Incomplete
 from airflow.sensors.base import BaseSensorOperator
 from typing import Any, Sequence

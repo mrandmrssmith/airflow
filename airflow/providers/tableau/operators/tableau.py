@@ -16,7 +16,7 @@
 # under the License.
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 from airflow.exceptions import AirflowException
 from airflow.models import BaseOperator
@@ -28,7 +28,6 @@ from airflow.providers.tableau.hooks.tableau import (
 
 if TYPE_CHECKING:
     from airflow.utils.context import Context
-
 
 RESOURCES_METHODS = {
     "datasources": ["delete", "refresh"],
@@ -45,7 +44,8 @@ RESOURCES_METHODS = {
 
 class TableauOperator(BaseOperator):
     """
-    Execute a Tableau API Resource
+    Execute a Tableau API Resource.
+
     https://tableau.github.io/server-client-python/docs/api-ref
 
     .. seealso::
@@ -63,6 +63,11 @@ class TableauOperator(BaseOperator):
     :param tableau_conn_id: The :ref:`Tableau Connection id <howto/connection:tableau>`
         containing the credentials to authenticate to the Tableau Server.
     """
+
+    template_fields: Sequence[str] = (
+        "find",
+        "match_with",
+    )
 
     def __init__(
         self,
@@ -90,6 +95,7 @@ class TableauOperator(BaseOperator):
     def execute(self, context: Context) -> str:
         """
         Executes the Tableau API resource and pushes the job id or downloaded file URI to xcom.
+
         :param context: The task context during execution.
         :return: the id of the job that executes the extract refresh or downloaded file URI.
         """
@@ -104,7 +110,6 @@ class TableauOperator(BaseOperator):
             raise AirflowException(error_message)
 
         with TableauHook(self.site_id, self.tableau_conn_id) as tableau_hook:
-
             resource = getattr(tableau_hook.server, self.resource)
             method = getattr(resource, self.method)
 
@@ -126,7 +131,6 @@ class TableauOperator(BaseOperator):
         return job_id
 
     def _get_resource_id(self, tableau_hook: TableauHook) -> str:
-
         if self.match_with == "id":
             return self.find
 

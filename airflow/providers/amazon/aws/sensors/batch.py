@@ -16,16 +16,16 @@
 # under the License.
 from __future__ import annotations
 
-import sys
-from typing import TYPE_CHECKING, Sequence
+from datetime import timedelta
+from functools import cached_property
+from typing import TYPE_CHECKING, Any, Sequence
 
-if sys.version_info >= (3, 8):
-    from functools import cached_property
-else:
-    from cached_property import cached_property
+from deprecated import deprecated
 
-from airflow.exceptions import AirflowException
+from airflow.configuration import conf
+from airflow.exceptions import AirflowException, AirflowProviderDeprecationWarning, AirflowSkipException
 from airflow.providers.amazon.aws.hooks.batch_client import BatchClientHook
+from airflow.providers.amazon.aws.triggers.batch import BatchJobTrigger
 from airflow.sensors.base import BaseSensorOperator
 
 if TYPE_CHECKING:
@@ -34,8 +34,7 @@ if TYPE_CHECKING:
 
 class BatchSensor(BaseSensorOperator):
     """
-    Asks for the state of the Batch Job execution until it reaches a failure state or success state.
-    If the job fails, the task will fail.
+    Poll the state of the Batch Job until it reaches a terminal state; fails if the job fails.
 
     .. seealso::
         For more information on how to use this sensor, take a look at the guide:
@@ -44,6 +43,10 @@ class BatchSensor(BaseSensorOperator):
     :param job_id: Batch job_id to check the state for
     :param aws_conn_id: aws connection to use, defaults to 'aws_default'
     :param region_name: aws region name associated with the client
+    :param deferrable: Run sensor in the deferrable mode.
+    :param poke_interval: polling period in seconds to check for the status of the job.
+    :param max_retries: Number of times to poll for job state before
+        returning the current state.
     """
 
     template_fields: Sequence[str] = ("job_id",)
@@ -56,16 +59,21 @@ class BatchSensor(BaseSensorOperator):
         job_id: str,
         aws_conn_id: str = "aws_default",
         region_name: str | None = None,
+        deferrable: bool = conf.getboolean("operators", "default_deferrable", fallback=False),
+        poke_interval: float = 5,
+        max_retries: int = 5,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.job_id = job_id
         self.aws_conn_id = aws_conn_id
         self.region_name = region_name
-        self.hook: BatchClientHook | None = None
+        self.deferrable = deferrable
+        self.poke_interval = poke_interval
+        self.max_retries = max_retries
 
     def poke(self, context: Context) -> bool:
-        job_description = self.get_hook().get_job_description(self.job_id)
+        job_description = self.hook.get_job_description(self.job_id)
         state = job_description["status"]
 
         if state == BatchClientHook.SUCCESS_STATE:
@@ -75,26 +83,71 @@ class BatchSensor(BaseSensorOperator):
             return False
 
         if state == BatchClientHook.FAILURE_STATE:
-            raise AirflowException(f"Batch sensor failed. AWS Batch job status: {state}")
+            # TODO: remove this if block when min_airflow_version is set to higher than 2.7.1
+            message = f"Batch sensor failed. AWS Batch job status: {state}"
+            if self.soft_fail:
+                raise AirflowSkipException(message)
+            raise AirflowException(message)
 
-        raise AirflowException(f"Batch sensor failed. Unknown AWS Batch job status: {state}")
+        # TODO: remove this if block when min_airflow_version is set to higher than 2.7.1
+        message = f"Batch sensor failed. Unknown AWS Batch job status: {state}"
+        if self.soft_fail:
+            raise AirflowSkipException(message)
+        raise AirflowException(message)
 
+    def execute(self, context: Context) -> None:
+        if not self.deferrable:
+            super().execute(context=context)
+        else:
+            timeout = (
+                timedelta(seconds=self.max_retries * self.poke_interval + 60)
+                if self.max_retries
+                else self.execution_timeout
+            )
+            self.defer(
+                timeout=timeout,
+                trigger=BatchJobTrigger(
+                    job_id=self.job_id,
+                    aws_conn_id=self.aws_conn_id,
+                    region_name=self.region_name,
+                    waiter_delay=int(self.poke_interval),
+                    waiter_max_attempts=self.max_retries,
+                ),
+                method_name="execute_complete",
+            )
+
+    def execute_complete(self, context: Context, event: dict[str, Any]) -> None:
+        """
+        Execute when the trigger fires - returns immediately.
+
+        Relies on trigger to throw an exception, otherwise it assumes execution was successful.
+        """
+        if event["status"] != "success":
+            message = f"Error while running job: {event}"
+            # TODO: remove this if-else block when min_airflow_version is set to higher than the version that
+            # changed in https://github.com/apache/airflow/pull/33424 is released (2.7.1)
+            if self.soft_fail:
+                raise AirflowSkipException(message)
+            raise AirflowException(message)
+        job_id = event["job_id"]
+        self.log.info("Batch Job %s complete", job_id)
+
+    @deprecated(reason="use `hook` property instead.", category=AirflowProviderDeprecationWarning)
     def get_hook(self) -> BatchClientHook:
-        """Create and return a BatchClientHook"""
-        if self.hook:
-            return self.hook
+        """Create and return a BatchClientHook."""
+        return self.hook
 
-        self.hook = BatchClientHook(
+    @cached_property
+    def hook(self) -> BatchClientHook:
+        return BatchClientHook(
             aws_conn_id=self.aws_conn_id,
             region_name=self.region_name,
         )
-        return self.hook
 
 
 class BatchComputeEnvironmentSensor(BaseSensorOperator):
     """
-    Asks for the state of the Batch compute environment until it reaches a failure state or success state.
-    If the environment fails, the task will fail.
+    Poll the state of the Batch environment until it reaches a terminal state; fails if the environment fails.
 
     .. seealso::
         For more information on how to use this sensor, take a look at the guide:
@@ -125,19 +178,23 @@ class BatchComputeEnvironmentSensor(BaseSensorOperator):
 
     @cached_property
     def hook(self) -> BatchClientHook:
-        """Create and return a BatchClientHook"""
+        """Create and return a BatchClientHook."""
         return BatchClientHook(
             aws_conn_id=self.aws_conn_id,
             region_name=self.region_name,
         )
 
     def poke(self, context: Context) -> bool:
-        response = self.hook.client.describe_compute_environments(
+        response = self.hook.client.describe_compute_environments(  # type: ignore[union-attr]
             computeEnvironments=[self.compute_environment]
         )
 
-        if len(response["computeEnvironments"]) == 0:
-            raise AirflowException(f"AWS Batch compute environment {self.compute_environment} not found")
+        if not response["computeEnvironments"]:
+            message = f"AWS Batch compute environment {self.compute_environment} not found"
+            # TODO: remove this if block when min_airflow_version is set to higher than 2.7.1
+            if self.soft_fail:
+                raise AirflowSkipException(message)
+            raise AirflowException(message)
 
         status = response["computeEnvironments"][0]["status"]
 
@@ -147,15 +204,16 @@ class BatchComputeEnvironmentSensor(BaseSensorOperator):
         if status in BatchClientHook.COMPUTE_ENVIRONMENT_INTERMEDIATE_STATUS:
             return False
 
-        raise AirflowException(
-            f"AWS Batch compute environment failed. AWS Batch compute environment status: {status}"
-        )
+        # TODO: remove this if block when min_airflow_version is set to higher than 2.7.1
+        message = f"AWS Batch compute environment failed. AWS Batch compute environment status: {status}"
+        if self.soft_fail:
+            raise AirflowSkipException(message)
+        raise AirflowException(message)
 
 
 class BatchJobQueueSensor(BaseSensorOperator):
     """
-    Asks for the state of the Batch job queue until it reaches a failure state or success state.
-    If the queue fails, the task will fail.
+    Poll the state of the Batch job queue until it reaches a terminal state; fails if the queue fails.
 
     .. seealso::
         For more information on how to use this sensor, take a look at the guide:
@@ -191,20 +249,26 @@ class BatchJobQueueSensor(BaseSensorOperator):
 
     @cached_property
     def hook(self) -> BatchClientHook:
-        """Create and return a BatchClientHook"""
+        """Create and return a BatchClientHook."""
         return BatchClientHook(
             aws_conn_id=self.aws_conn_id,
             region_name=self.region_name,
         )
 
     def poke(self, context: Context) -> bool:
-        response = self.hook.client.describe_job_queues(jobQueues=[self.job_queue])
+        response = self.hook.client.describe_job_queues(  # type: ignore[union-attr]
+            jobQueues=[self.job_queue]
+        )
 
-        if len(response["jobQueues"]) == 0:
+        if not response["jobQueues"]:
             if self.treat_non_existing_as_deleted:
                 return True
             else:
-                raise AirflowException(f"AWS Batch job queue {self.job_queue} not found")
+                # TODO: remove this if block when min_airflow_version is set to higher than 2.7.1
+                message = f"AWS Batch job queue {self.job_queue} not found"
+                if self.soft_fail:
+                    raise AirflowSkipException(message)
+                raise AirflowException(message)
 
         status = response["jobQueues"][0]["status"]
 
@@ -214,4 +278,7 @@ class BatchJobQueueSensor(BaseSensorOperator):
         if status in BatchClientHook.JOB_QUEUE_INTERMEDIATE_STATUS:
             return False
 
-        raise AirflowException(f"AWS Batch job queue failed. AWS Batch job queue status: {status}")
+        message = f"AWS Batch job queue failed. AWS Batch job queue status: {status}"
+        if self.soft_fail:
+            raise AirflowSkipException(message)
+        raise AirflowException(message)

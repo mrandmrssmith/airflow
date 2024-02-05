@@ -23,8 +23,8 @@ Papermill
 Apache Airflow supports integration with Papermill_. Papermill is a tool for
 parameterizing and executing Jupyter Notebooks. Perhaps you have a financial
 report that you wish to run with different values on the first or last day of
-a month or at the beginning or end of the year. Using *parameters* in your
-notebook and using the *PapermillOperator* makes this a breeze.
+a month or at the beginning or end of the year. Using **parameters** in your
+notebook and using the :class:`~airflow.providers.papermill.operators.papermill.PapermillOperator` makes this a breeze.
 
 .. _Papermill: https://papermill.readthedocs.io/en/latest/
 
@@ -42,7 +42,7 @@ with input parameters in order to overwrite the values in parameters. If no cell
 tagged with parameters the injected cell will be inserted at the top of the notebook.
 
 Make sure that you save your notebook somewhere so that Airflow can access it. Papermill
-supports S3, GCS, Azure and Local. HDFS is *not* supported.
+supports S3, GCS, Azure and Local. HDFS is **not supported**.
 
 Example DAG
 '''''''''''
@@ -62,3 +62,11 @@ Example DAG to Verify the message in the notebook:
     :language: python
     :start-after: [START howto_verify_operator_papermill]
     :end-before: [END howto_verify_operator_papermill]
+
+
+Example DAG to Verify the message in the notebook using a remote jupyter kernel:
+
+.. exampleinclude:: /../../tests/system/providers/papermill/example_papermill_remote_verify.py
+    :language: python
+    :start-after: [START howto_verify_operator_papermill_remote_kernel]
+    :end-before: [END howto_verify_operator_papermill_remote_kernel]

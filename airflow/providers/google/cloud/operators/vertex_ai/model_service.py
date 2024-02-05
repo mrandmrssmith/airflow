@@ -15,48 +15,44 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""This module contains Google Vertex AI operators.
+"""This module contains Google Vertex AI operators."""
 
-.. spelling::
-
-    aiplatform
-    camelCase
-"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Sequence
 
 from google.api_core.exceptions import NotFound
 from google.api_core.gapic_v1.method import DEFAULT, _MethodDefault
-from google.api_core.retry import Retry
 from google.cloud.aiplatform_v1.types import Model, model_service
 
-from airflow.models import BaseOperator
 from airflow.providers.google.cloud.hooks.vertex_ai.model_service import ModelServiceHook
 from airflow.providers.google.cloud.links.vertex_ai import (
     VertexAIModelExportLink,
     VertexAIModelLink,
     VertexAIModelListLink,
 )
+from airflow.providers.google.cloud.operators.cloud_base import GoogleCloudBaseOperator
 
 if TYPE_CHECKING:
+    from google.api_core.retry import Retry
+
     from airflow.utils.context import Context
 
 
-class DeleteModelOperator(BaseOperator):
+class DeleteModelOperator(GoogleCloudBaseOperator):
     """
     Deletes a Model.
 
     :param project_id: Required. The ID of the Google Cloud project that the service belongs to.
     :param region: Required. The ID of the Google Cloud region that the service belongs to.
-    :param model_id: Required. The name of the Model resource to be deleted.
+    :param model_id: Required. The ID of the Model resource to be deleted.
+        Could be in format `projects/{project}/locations/{location}/models/{model_id}@{version_id}` or
+        `projects/{project}/locations/{location}/models/{model_id}@{version_alias}` if model
+        has several versions.
     :param retry: Designation of what errors, if any, should be retried.
     :param timeout: The timeout for this request.
     :param metadata: Strings which should be sent along with the request as metadata.
     :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -79,7 +75,6 @@ class DeleteModelOperator(BaseOperator):
         timeout: float | None = None,
         metadata: Sequence[tuple[str, str]] = (),
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         **kwargs,
     ) -> None:
@@ -91,16 +86,14 @@ class DeleteModelOperator(BaseOperator):
         self.timeout = timeout
         self.metadata = metadata
         self.gcp_conn_id = gcp_conn_id
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
 
     def execute(self, context: Context):
         hook = ModelServiceHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
-
+        self.model_id = self.model_id.rpartition("@")[0] if "@" in self.model_id else self.model_id
         try:
             self.log.info("Deleting model: %s", self.model_id)
             operation = hook.delete_model(
@@ -117,21 +110,96 @@ class DeleteModelOperator(BaseOperator):
             self.log.info("The Model ID %s does not exist.", self.model_id)
 
 
-class ExportModelOperator(BaseOperator):
+class GetModelOperator(GoogleCloudBaseOperator):
+    """
+    Retrieves a Model.
+
+    :param project_id: Required. The ID of the Google Cloud project that the service belongs to.
+    :param region: Required. The ID of the Google Cloud region that the service belongs to.
+    :param model_id: Required. The ID of the Model resource to be retrieved.
+        Could be in format `projects/{project}/locations/{location}/models/{model_id}@{version_id}` or
+        `projects/{project}/locations/{location}/models/{model_id}@{version_alias}` if model has
+        several versions.
+    :param retry: Designation of what errors, if any, should be retried.
+    :param timeout: The timeout for this request.
+    :param metadata: Strings which should be sent along with the request as metadata.
+    :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
+    :param impersonation_chain: Optional service account to impersonate using short-term
+        credentials, or chained list of accounts required to get the access_token
+        of the last account in the list, which will be impersonated in the request.
+        If set as a string, the account must grant the originating account
+        the Service Account Token Creator IAM role.
+        If set as a sequence, the identities from the list must grant
+        Service Account Token Creator IAM role to the directly preceding identity, with first
+        account from the list granting this role to the originating account (templated).
+    """
+
+    template_fields = ("region", "model_id", "project_id", "impersonation_chain")
+    operator_extra_links = (VertexAIModelLink(),)
+
+    def __init__(
+        self,
+        *,
+        region: str,
+        project_id: str,
+        model_id: str,
+        retry: Retry | _MethodDefault = DEFAULT,
+        timeout: float | None = None,
+        metadata: Sequence[tuple[str, str]] = (),
+        gcp_conn_id: str = "google_cloud_default",
+        impersonation_chain: str | Sequence[str] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.region = region
+        self.project_id = project_id
+        self.model_id = model_id
+        self.retry = retry
+        self.timeout = timeout
+        self.metadata = metadata
+        self.gcp_conn_id = gcp_conn_id
+        self.impersonation_chain = impersonation_chain
+
+    def execute(self, context: Context):
+        hook = ModelServiceHook(
+            gcp_conn_id=self.gcp_conn_id,
+            impersonation_chain=self.impersonation_chain,
+        )
+        self.model_id = self.model_id.rpartition("@")[0] if "@" in self.model_id else self.model_id
+        try:
+            self.log.info("Retrieving model: %s", self.model_id)
+            model = hook.get_model(
+                project_id=self.project_id,
+                region=self.region,
+                model_id=self.model_id,
+                retry=self.retry,
+                timeout=self.timeout,
+                metadata=self.metadata,
+            )
+            self.log.info("Model found. Model ID: %s", self.model_id)
+
+            self.xcom_push(context, key="model_id", value=self.model_id)
+            VertexAIModelLink.persist(context=context, task_instance=self, model_id=self.model_id)
+            return Model.to_dict(model)
+        except NotFound:
+            self.log.info("The Model ID %s does not exist.", self.model_id)
+
+
+class ExportModelOperator(GoogleCloudBaseOperator):
     """
     Exports a trained, exportable Model to a location specified by the user.
 
     :param project_id: Required. The ID of the Google Cloud project that the service belongs to.
     :param region: Required. The ID of the Google Cloud region that the service belongs to.
-    :param model_id: Required. The resource name of the Model to export.
+    :param model_id: Required. The ID of the Model to export.
+        Could be in format `projects/{project}/locations/{location}/models/{model_id}@{version_id}` or
+        `projects/{project}/locations/{location}/models/{model_id}@{version_alias}` if model has
+        several versions.
     :param output_config:  Required. The desired output location and configuration.
     :param retry: Designation of what errors, if any, should be retried.
     :param timeout: The timeout for this request.
     :param metadata: Strings which should be sent along with the request as metadata.
     :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -156,7 +224,6 @@ class ExportModelOperator(BaseOperator):
         timeout: float | None = None,
         metadata: Sequence[tuple[str, str]] = (),
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         **kwargs,
     ) -> None:
@@ -169,13 +236,11 @@ class ExportModelOperator(BaseOperator):
         self.timeout = timeout
         self.metadata = metadata
         self.gcp_conn_id = gcp_conn_id
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
 
     def execute(self, context: Context):
         hook = ModelServiceHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
 
@@ -197,7 +262,7 @@ class ExportModelOperator(BaseOperator):
             self.log.info("The Model ID %s does not exist.", self.model_id)
 
 
-class ListModelsOperator(BaseOperator):
+class ListModelsOperator(GoogleCloudBaseOperator):
     r"""
     Lists Models in a Location.
 
@@ -206,8 +271,8 @@ class ListModelsOperator(BaseOperator):
     :param retry: Designation of what errors, if any, should be retried.
     :param filter: An expression for filtering the results of the request. For field names both
         snake_case and camelCase are supported.
-        -  ``model`` supports = and !=. ``model`` represents the Model ID, i.e. the last segment of the
-        Model's [resource name][google.cloud.aiplatform.v1.Model.name].
+        -  ``model`` supports = and !=. ``model`` represents the Model ID,  Could be in format the
+        last segment of the Model's [resource name][google.cloud.aiplatform.v1.Model.name].
         -  ``display_name`` supports = and !=
         -  ``labels`` supports general map functions that is:
         --  ``labels.key=value`` - key:value equality
@@ -225,9 +290,6 @@ class ListModelsOperator(BaseOperator):
     :param timeout: The timeout for this request.
     :param metadata: Strings which should be sent along with the request as metadata.
     :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -255,7 +317,6 @@ class ListModelsOperator(BaseOperator):
         timeout: float | None = None,
         metadata: Sequence[tuple[str, str]] = (),
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         **kwargs,
     ) -> None:
@@ -271,13 +332,11 @@ class ListModelsOperator(BaseOperator):
         self.timeout = timeout
         self.metadata = metadata
         self.gcp_conn_id = gcp_conn_id
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
 
     def execute(self, context: Context):
         hook = ModelServiceHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
         results = hook.list_models(
@@ -296,20 +355,17 @@ class ListModelsOperator(BaseOperator):
         return [Model.to_dict(result) for result in results]
 
 
-class UploadModelOperator(BaseOperator):
+class UploadModelOperator(GoogleCloudBaseOperator):
     """
     Uploads a Model artifact into Vertex AI.
 
     :param project_id: Required. The ID of the Google Cloud project that the service belongs to.
     :param region: Required. The ID of the Google Cloud region that the service belongs to.
-    :param model:  Required. The Model to create.
+    :param model: Required. The Model to create.
     :param retry: Designation of what errors, if any, should be retried.
     :param timeout: The timeout for this request.
     :param metadata: Strings which should be sent along with the request as metadata.
     :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -333,7 +389,6 @@ class UploadModelOperator(BaseOperator):
         timeout: float | None = None,
         metadata: Sequence[tuple[str, str]] = (),
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         **kwargs,
     ) -> None:
@@ -345,13 +400,11 @@ class UploadModelOperator(BaseOperator):
         self.timeout = timeout
         self.metadata = metadata
         self.gcp_conn_id = gcp_conn_id
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
 
     def execute(self, context: Context):
         hook = ModelServiceHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
         self.log.info("Upload model")
@@ -372,3 +425,366 @@ class UploadModelOperator(BaseOperator):
         self.xcom_push(context, key="model_id", value=model_id)
         VertexAIModelLink.persist(context=context, task_instance=self, model_id=model_id)
         return model_resp
+
+
+class ListModelVersionsOperator(GoogleCloudBaseOperator):
+    """
+    Lists Model versions in a Location.
+
+    :param project_id: Required. The ID of the Google Cloud project that the service belongs to.
+    :param region: Required. The ID of the Google Cloud region that the service belongs to.
+    :param model_id: Required. The ID of the model to list versions for.
+        Could be in format `projects/{project}/locations/{location}/models/{model_id}@{version_id}` or
+        `projects/{project}/locations/{location}/models/{model_id}@{version_alias}` if model has
+        several versions.
+    :param retry: Designation of what errors, if any, should be retried.
+    :param timeout: The timeout for this request.
+    :param metadata: Strings which should be sent along with the request as metadata.
+    :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
+    :param impersonation_chain: Optional service account to impersonate using short-term
+        credentials, or chained list of accounts required to get the access_token
+        of the last account in the list, which will be impersonated in the request.
+        If set as a string, the account must grant the originating account
+        the Service Account Token Creator IAM role.
+        If set as a sequence, the identities from the list must grant
+        Service Account Token Creator IAM role to the directly preceding identity, with first
+        account from the list granting this role to the originating account (templated).
+    """
+
+    template_fields = ("model_id", "region", "project_id", "impersonation_chain")
+
+    def __init__(
+        self,
+        *,
+        region: str,
+        project_id: str,
+        model_id: str,
+        retry: Retry | _MethodDefault = DEFAULT,
+        timeout: float | None = None,
+        metadata: Sequence[tuple[str, str]] = (),
+        gcp_conn_id: str = "google_cloud_default",
+        impersonation_chain: str | Sequence[str] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.region = region
+        self.project_id = project_id
+        self.model_id = model_id
+        self.retry = retry
+        self.timeout = timeout
+        self.metadata = metadata
+        self.gcp_conn_id = gcp_conn_id
+        self.impersonation_chain = impersonation_chain
+
+    def execute(self, context: Context):
+        hook = ModelServiceHook(
+            gcp_conn_id=self.gcp_conn_id,
+            impersonation_chain=self.impersonation_chain,
+        )
+        self.log.info("Retrieving versions list from model: %s", self.model_id)
+        results = hook.list_model_versions(
+            project_id=self.project_id,
+            region=self.region,
+            model_id=self.model_id,
+            retry=self.retry,
+            timeout=self.timeout,
+            metadata=self.metadata,
+        )
+        for result in results:
+            model = Model.to_dict(result)
+            self.log.info("Model name: %s;", model["name"])
+            self.log.info("Model version: %s, model alias %s;", model["version_id"], model["version_aliases"])
+        return [Model.to_dict(result) for result in results]
+
+
+class SetDefaultVersionOnModelOperator(GoogleCloudBaseOperator):
+    """
+    Sets the desired Model version as Default.
+
+    :param project_id: Required. The ID of the Google Cloud project that the service belongs to.
+    :param region: Required. The ID of the Google Cloud region that the service belongs to.
+    :param model_id: Required. The ID of the model to set as default.
+        Should be in format `projects/{project}/locations/{location}/models/{model_id}@{version_id}` or
+        `projects/{project}/locations/{location}/models/{model_id}@{version_alias}` if model
+        has several versions.
+    :param retry: Designation of what errors, if any, should be retried.
+    :param timeout: The timeout for this request.
+    :param metadata: Strings which should be sent along with the request as metadata.
+    :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
+    :param impersonation_chain: Optional service account to impersonate using short-term
+        credentials, or chained list of accounts required to get the access_token
+        of the last account in the list, which will be impersonated in the request.
+        If set as a string, the account must grant the originating account
+        the Service Account Token Creator IAM role.
+        If set as a sequence, the identities from the list must grant
+        Service Account Token Creator IAM role to the directly preceding identity, with first
+        account from the list granting this role to the originating account (templated).
+    """
+
+    template_fields = ("model_id", "project_id", "impersonation_chain")
+    operator_extra_links = (VertexAIModelLink(),)
+
+    def __init__(
+        self,
+        *,
+        region: str,
+        project_id: str,
+        model_id: str,
+        retry: Retry | _MethodDefault = DEFAULT,
+        timeout: float | None = None,
+        metadata: Sequence[tuple[str, str]] = (),
+        gcp_conn_id: str = "google_cloud_default",
+        impersonation_chain: str | Sequence[str] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.region = region
+        self.project_id = project_id
+        self.model_id = model_id
+        self.retry = retry
+        self.timeout = timeout
+        self.metadata = metadata
+        self.gcp_conn_id = gcp_conn_id
+        self.impersonation_chain = impersonation_chain
+
+    def execute(self, context: Context):
+        hook = ModelServiceHook(
+            gcp_conn_id=self.gcp_conn_id,
+            impersonation_chain=self.impersonation_chain,
+        )
+
+        self.log.info(
+            "Setting version %s as default on model %s", self.model_id.rpartition("@")[0], self.model_id
+        )
+
+        updated_model = hook.set_version_as_default(
+            region=self.region,
+            model_id=self.model_id,
+            project_id=self.project_id,
+            retry=self.retry,
+            timeout=self.timeout,
+            metadata=self.metadata,
+        )
+        VertexAIModelLink.persist(context=context, task_instance=self, model_id=self.model_id)
+        return Model.to_dict(updated_model)
+
+
+class AddVersionAliasesOnModelOperator(GoogleCloudBaseOperator):
+    """
+    Adds version aliases for the Model.
+
+    :param project_id: Required. The ID of the Google Cloud project that the service belongs to.
+    :param region: Required. The ID of the Google Cloud region that the service belongs to.
+    :param model_id: Required. The ID of the model to add version aliases for.
+        Should be in format `projects/{project}/locations/{location}/models/{model_id}@{version_id}` or
+        `projects/{project}/locations/{location}/models/{model_id}@{version_alias}`.
+    :param version_aliases: List of version aliases to be added to model version.
+    :param retry: Designation of what errors, if any, should be retried.
+    :param timeout: The timeout for this request.
+    :param metadata: Strings which should be sent along with the request as metadata.
+    :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
+    :param impersonation_chain: Optional service account to impersonate using short-term
+        credentials, or chained list of accounts required to get the access_token
+        of the last account in the list, which will be impersonated in the request.
+        If set as a string, the account must grant the originating account
+        the Service Account Token Creator IAM role.
+        If set as a sequence, the identities from the list must grant
+        Service Account Token Creator IAM role to the directly preceding identity, with first
+        account from the list granting this role to the originating account (templated).
+    """
+
+    template_fields = ("model_id", "project_id", "impersonation_chain")
+    operator_extra_links = (VertexAIModelLink(),)
+
+    def __init__(
+        self,
+        *,
+        region: str,
+        project_id: str,
+        model_id: str,
+        version_aliases: Sequence[str],
+        retry: Retry | _MethodDefault = DEFAULT,
+        timeout: float | None = None,
+        metadata: Sequence[tuple[str, str]] = (),
+        gcp_conn_id: str = "google_cloud_default",
+        impersonation_chain: str | Sequence[str] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.region = region
+        self.project_id = project_id
+        self.model_id = model_id
+        self.version_aliases = version_aliases
+        self.retry = retry
+        self.timeout = timeout
+        self.metadata = metadata
+        self.gcp_conn_id = gcp_conn_id
+        self.impersonation_chain = impersonation_chain
+
+    def execute(self, context: Context):
+        hook = ModelServiceHook(
+            gcp_conn_id=self.gcp_conn_id,
+            impersonation_chain=self.impersonation_chain,
+        )
+        self.log.info(
+            "Adding aliases %s to model version %s", self.version_aliases, self.model_id.rpartition("@")[0]
+        )
+
+        updated_model = hook.add_version_aliases(
+            region=self.region,
+            model_id=self.model_id,
+            version_aliases=self.version_aliases,
+            project_id=self.project_id,
+            retry=self.retry,
+            timeout=self.timeout,
+            metadata=self.metadata,
+        )
+        VertexAIModelLink.persist(context=context, task_instance=self, model_id=self.model_id)
+        return Model.to_dict(updated_model)
+
+
+class DeleteVersionAliasesOnModelOperator(GoogleCloudBaseOperator):
+    """
+    Deletes version aliases for the Model.
+
+    :param project_id: Required. The ID of the Google Cloud project that the service belongs to.
+    :param region: Required. The ID of the Google Cloud region that the service belongs to.
+    :param model_id: Required. The ID of the model to delete version aliases from.
+        Should be in format `projects/{project}/locations/{location}/models/{model_id}@{version_id}` or
+        `projects/{project}/locations/{location}/models/{model_id}@{version_alias}`.
+    :param version_aliases: List of version aliases to be deleted from model version.
+    :param retry: Designation of what errors, if any, should be retried.
+    :param timeout: The timeout for this request.
+    :param metadata: Strings which should be sent along with the request as metadata.
+    :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
+    :param impersonation_chain: Optional service account to impersonate using short-term
+        credentials, or chained list of accounts required to get the access_token
+        of the last account in the list, which will be impersonated in the request.
+        If set as a string, the account must grant the originating account
+        the Service Account Token Creator IAM role.
+        If set as a sequence, the identities from the list must grant
+        Service Account Token Creator IAM role to the directly preceding identity, with first
+        account from the list granting this role to the originating account (templated).
+    """
+
+    template_fields = ("model_id", "project_id", "impersonation_chain")
+    operator_extra_links = (VertexAIModelLink(),)
+
+    def __init__(
+        self,
+        *,
+        region: str,
+        project_id: str,
+        model_id: str,
+        version_aliases: Sequence[str],
+        retry: Retry | _MethodDefault = DEFAULT,
+        timeout: float | None = None,
+        metadata: Sequence[tuple[str, str]] = (),
+        gcp_conn_id: str = "google_cloud_default",
+        impersonation_chain: str | Sequence[str] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.region = region
+        self.project_id = project_id
+        self.model_id = model_id
+        self.version_aliases = version_aliases
+        self.retry = retry
+        self.timeout = timeout
+        self.metadata = metadata
+        self.gcp_conn_id = gcp_conn_id
+        self.impersonation_chain = impersonation_chain
+
+    def execute(self, context: Context):
+        hook = ModelServiceHook(
+            gcp_conn_id=self.gcp_conn_id,
+            impersonation_chain=self.impersonation_chain,
+        )
+        self.log.info(
+            "Deleting aliases %s from model version %s",
+            self.version_aliases,
+            self.model_id.rpartition("@")[0],
+        )
+
+        updated_model = hook.delete_version_aliases(
+            region=self.region,
+            model_id=self.model_id,
+            version_aliases=self.version_aliases,
+            project_id=self.project_id,
+            retry=self.retry,
+            timeout=self.timeout,
+            metadata=self.metadata,
+        )
+        VertexAIModelLink.persist(context=context, task_instance=self, model_id=self.model_id)
+        return Model.to_dict(updated_model)
+
+
+class DeleteModelVersionOperator(GoogleCloudBaseOperator):
+    """
+    Delete Model version in a Location.
+
+    :param project_id: Required. The ID of the Google Cloud project that the service belongs to.
+    :param region: Required. The ID of the Google Cloud region that the service belongs to.
+    :param model_id: Required. The ID of the Model in which to delete version.
+        Should be in format `projects/{project}/locations/{location}/models/{model_id}@{version_id}` or
+        `projects/{project}/locations/{location}/models/{model_id}@{version_alias}`
+        several versions.
+    :param retry: Designation of what errors, if any, should be retried.
+    :param timeout: The timeout for this request.
+    :param metadata: Strings which should be sent along with the request as metadata.
+    :param gcp_conn_id: The connection ID to use connecting to Google Cloud.
+    :param impersonation_chain: Optional service account to impersonate using short-term
+        credentials, or chained list of accounts required to get the access_token
+        of the last account in the list, which will be impersonated in the request.
+        If set as a string, the account must grant the originating account
+        the Service Account Token Creator IAM role.
+        If set as a sequence, the identities from the list must grant
+        Service Account Token Creator IAM role to the directly preceding identity, with first
+        account from the list granting this role to the originating account (templated).
+    """
+
+    template_fields = ("model_id", "project_id", "impersonation_chain")
+
+    def __init__(
+        self,
+        *,
+        region: str,
+        project_id: str,
+        model_id: str,
+        retry: Retry | _MethodDefault = DEFAULT,
+        timeout: float | None = None,
+        metadata: Sequence[tuple[str, str]] = (),
+        gcp_conn_id: str = "google_cloud_default",
+        impersonation_chain: str | Sequence[str] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.region = region
+        self.project_id = project_id
+        self.model_id = model_id
+        self.retry = retry
+        self.timeout = timeout
+        self.metadata = metadata
+        self.gcp_conn_id = gcp_conn_id
+        self.impersonation_chain = impersonation_chain
+
+    def execute(self, context: Context):
+        hook = ModelServiceHook(
+            gcp_conn_id=self.gcp_conn_id,
+            impersonation_chain=self.impersonation_chain,
+        )
+
+        try:
+            self.log.info("Deleting model version: %s", self.model_id)
+            operation = hook.delete_model_version(
+                project_id=self.project_id,
+                region=self.region,
+                model_id=self.model_id,
+                retry=self.retry,
+                timeout=self.timeout,
+                metadata=self.metadata,
+            )
+            hook.wait_for_operation(timeout=self.timeout, operation=operation)
+            self.log.info("Model version was deleted.")
+        except NotFound:
+            self.log.info("The Model ID %s does not exist.", self.model_id)

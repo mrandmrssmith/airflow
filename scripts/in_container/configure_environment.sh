@@ -24,7 +24,9 @@ readonly TMUX_CONF_FILE=".tmux.conf"
 if [[ -d "${FILES_DIR}" ]]; then
     export AIRFLOW__CORE__DAGS_FOLDER="/files/dags"
     mkdir -pv "${AIRFLOW__CORE__DAGS_FOLDER}"
-    sudo chown "${HOST_USER_ID}":"${HOST_GROUP_ID}" "${AIRFLOW__CORE__DAGS_FOLDER}"
+    if [[ ${HOST_OS} == "linux" && ${DOCKER_IS_ROOTLESS} != "true" ]]; then
+        sudo chown "${HOST_USER_ID}":"${HOST_GROUP_ID}" "${AIRFLOW__CORE__DAGS_FOLDER}" || true
+    fi
 else
     export AIRFLOW__CORE__DAGS_FOLDER="${AIRFLOW_HOME}/dags"
 fi
@@ -36,8 +38,10 @@ if [[ -d "${AIRFLOW_BREEZE_CONFIG_DIR}" && \
     echo
     echo "${COLOR_BLUE}Sourcing environment variables from ${VARIABLES_ENV_FILE} in ${AIRFLOW_BREEZE_CONFIG_DIR}${COLOR_RESET}"
     echo
+    set -o allexport
      # shellcheck disable=1090
     source "${VARIABLES_ENV_FILE}"
+    set +o allexport
     popd >/dev/null 2>&1 || exit 1
 fi
 

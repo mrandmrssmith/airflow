@@ -26,10 +26,6 @@ from urllib.parse import urlsplit
 from airflow.configuration import conf
 from airflow.exceptions import AirflowException
 
-# TODO: Logging format and level should be configured
-# in this file instead of from airflow.cfg. Currently
-# there are other log format and level configurations in
-# settings.py and cli.py. Please see AIRFLOW-1455.
 LOG_LEVEL: str = conf.get_mandatory_value("logging", "LOGGING_LEVEL").upper()
 
 
@@ -197,7 +193,6 @@ if os.environ.get("CONFIG_PROCESSOR_MANAGER_LOGGER") == "True":
 REMOTE_LOGGING: bool = conf.getboolean("logging", "remote_logging")
 
 if REMOTE_LOGGING:
-
     ELASTICSEARCH_HOST: str | None = conf.get("elasticsearch", "HOST")
 
     # Storage bucket URL for remote logging
@@ -205,8 +200,10 @@ if REMOTE_LOGGING:
     # Cloudwatch log groups should start with "cloudwatch://"
     # GCS buckets should start with "gs://"
     # WASB buckets should start with "wasb"
+    # HDFS path should start with "hdfs://"
     # just to help Airflow select correct handler
     REMOTE_BASE_LOG_FOLDER: str = conf.get_mandatory_value("logging", "REMOTE_BASE_LOG_FOLDER")
+    REMOTE_TASK_HANDLER_KWARGS = conf.getjson("logging", "REMOTE_TASK_HANDLER_KWARGS", fallback={})
 
     if REMOTE_BASE_LOG_FOLDER.startswith("s3://"):
         S3_REMOTE_HANDLERS: dict[str, dict[str, str | None]] = {
@@ -248,15 +245,17 @@ if REMOTE_LOGGING:
 
         DEFAULT_LOGGING_CONFIG["handlers"].update(GCS_REMOTE_HANDLERS)
     elif REMOTE_BASE_LOG_FOLDER.startswith("wasb"):
+        wasb_log_container = conf.get_mandatory_value(
+            "azure_remote_logging", "remote_wasb_log_container", fallback="airflow-logs"
+        )
         WASB_REMOTE_HANDLERS: dict[str, dict[str, str | bool | None]] = {
             "task": {
                 "class": "airflow.providers.microsoft.azure.log.wasb_task_handler.WasbTaskHandler",
                 "formatter": "airflow",
                 "base_log_folder": str(os.path.expanduser(BASE_LOG_FOLDER)),
                 "wasb_log_folder": REMOTE_BASE_LOG_FOLDER,
-                "wasb_container": "airflow-logs",
+                "wasb_container": wasb_log_container,
                 "filename_template": FILENAME_TEMPLATE,
-                "delete_local_copy": False,
             },
         }
 
@@ -286,8 +285,18 @@ if REMOTE_LOGGING:
             },
         }
         DEFAULT_LOGGING_CONFIG["handlers"].update(OSS_REMOTE_HANDLERS)
+    elif REMOTE_BASE_LOG_FOLDER.startswith("hdfs://"):
+        HDFS_REMOTE_HANDLERS: dict[str, dict[str, str | None]] = {
+            "task": {
+                "class": "airflow.providers.apache.hdfs.log.hdfs_task_handler.HdfsTaskHandler",
+                "formatter": "airflow",
+                "base_log_folder": str(os.path.expanduser(BASE_LOG_FOLDER)),
+                "hdfs_log_folder": REMOTE_BASE_LOG_FOLDER,
+                "filename_template": FILENAME_TEMPLATE,
+            },
+        }
+        DEFAULT_LOGGING_CONFIG["handlers"].update(HDFS_REMOTE_HANDLERS)
     elif ELASTICSEARCH_HOST:
-        ELASTICSEARCH_LOG_ID_TEMPLATE: str = conf.get_mandatory_value("elasticsearch", "LOG_ID_TEMPLATE")
         ELASTICSEARCH_END_OF_LOG_MARK: str = conf.get_mandatory_value("elasticsearch", "END_OF_LOG_MARK")
         ELASTICSEARCH_FRONTEND: str = conf.get_mandatory_value("elasticsearch", "frontend")
         ELASTICSEARCH_WRITE_STDOUT: bool = conf.getboolean("elasticsearch", "WRITE_STDOUT")
@@ -301,7 +310,6 @@ if REMOTE_LOGGING:
                 "class": "airflow.providers.elasticsearch.log.es_task_handler.ElasticsearchTaskHandler",
                 "formatter": "airflow",
                 "base_log_folder": str(os.path.expanduser(BASE_LOG_FOLDER)),
-                "log_id_template": ELASTICSEARCH_LOG_ID_TEMPLATE,
                 "filename_template": FILENAME_TEMPLATE,
                 "end_of_log_mark": ELASTICSEARCH_END_OF_LOG_MARK,
                 "host": ELASTICSEARCH_HOST,
@@ -321,3 +329,4 @@ if REMOTE_LOGGING:
             "section 'elasticsearch' if you are using Elasticsearch. In the other case, "
             "'remote_base_log_folder' option in the 'logging' section."
         )
+    DEFAULT_LOGGING_CONFIG["handlers"]["task"].update(REMOTE_TASK_HANDLER_KWARGS)

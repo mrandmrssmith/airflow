@@ -19,14 +19,13 @@ from __future__ import annotations
 
 import json
 import re
-import unittest
 from copy import deepcopy
 from unittest import mock
 from unittest.mock import MagicMock, PropertyMock
 
+import httplib2
 import pytest
 from googleapiclient.errors import HttpError
-from parameterized import parameterized
 
 from airflow.exceptions import AirflowException
 from airflow.providers.google.cloud.hooks.cloud_storage_transfer_service import (
@@ -103,13 +102,12 @@ def _with_name(body, job_name):
     return obj
 
 
-class GCPRequestMock:
+class TestGCPTransferServiceHookWithPassedName:
+    def test_delegate_to_runtime_error(self):
+        with pytest.raises(RuntimeError):
+            CloudDataTransferServiceHook(gcp_conn_id="test", delegate_to="delegate_to")
 
-    status = TEST_HTTP_ERR_CODE
-
-
-class TestGCPTransferServiceHookWithPassedName(unittest.TestCase):
-    def setUp(self):
+    def setup_method(self):
         with mock.patch(
             "airflow.providers.google.common.hooks.base_google.GoogleBaseHook.__init__",
             new=mock_base_gcp_hook_no_default_project_id,
@@ -141,10 +139,11 @@ class TestGCPTransferServiceHookWithPassedName(unittest.TestCase):
         enable_transfer_job: MagicMock,
     ):
         body = _with_name(TEST_BODY, TEST_CLEAR_JOB_NAME)
-        get_conn.side_effect = HttpError(GCPRequestMock(), TEST_HTTP_ERR_CONTENT)
+        get_conn.side_effect = HttpError(
+            httplib2.Response({"status": TEST_HTTP_ERR_CODE}), TEST_HTTP_ERR_CONTENT
+        )
 
         with pytest.raises(HttpError):
-
             # check status DELETED generates new job name
             get_transfer_job.return_value = TEST_RESULT_STATUS_DELETED
             self.gct_hook.create_transfer_job(body=body)
@@ -157,17 +156,16 @@ class TestGCPTransferServiceHookWithPassedName(unittest.TestCase):
         assert res == TEST_RESULT_STATUS_ENABLED
 
 
-class TestJobNames(unittest.TestCase):
-    def setUp(self) -> None:
-        self.re_suffix = re.compile("^[0-9]{10}$")
+class TestJobNames:
+    re_suffix = re.compile("^[0-9]{10}$")
 
-    def test_new_suffix(self):
-        for job_name in ["jobNames/new_job", "jobNames/new_job_h", "jobNames/newJob"]:
-            assert self.re_suffix.match(gen_job_name(job_name).split("_")[-1]) is not None
+    @pytest.mark.parametrize("job_name", ["jobNames/new_job", "jobNames/new_job_h", "jobNames/newJob"])
+    def test_new_suffix(self, job_name):
+        assert self.re_suffix.match(gen_job_name(job_name).split("_")[-1]) is not None
 
 
-class TestGCPTransferServiceHookWithPassedProjectId(unittest.TestCase):
-    def setUp(self):
+class TestGCPTransferServiceHookWithPassedProjectId:
+    def setup_method(self):
         with mock.patch(
             "airflow.providers.google.common.hooks.base_google.GoogleBaseHook.__init__",
             new=mock_base_gcp_hook_no_default_project_id,
@@ -474,7 +472,8 @@ class TestGCPTransferServiceHookWithPassedProjectId(unittest.TestCase):
                 expected_statuses=GcpTransferOperationStatus.SUCCESS,
             )
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "statuses, expected_statuses",
         [
             ([GcpTransferOperationStatus.ABORTED], (GcpTransferOperationStatus.IN_PROGRESS,)),
             (
@@ -494,7 +493,7 @@ class TestGCPTransferServiceHookWithPassedProjectId(unittest.TestCase):
                 [GcpTransferOperationStatus.PAUSED, GcpTransferOperationStatus.ABORTED],
                 (GcpTransferOperationStatus.IN_PROGRESS,),
             ),
-        ]
+        ],
     )
     def test_operations_contain_expected_statuses_red_path(self, statuses, expected_statuses):
         operations = [{NAME: TEST_TRANSFER_OPERATION_NAME, METADATA: {STATUS: status}} for status in statuses]
@@ -507,7 +506,8 @@ class TestGCPTransferServiceHookWithPassedProjectId(unittest.TestCase):
                 operations, GcpTransferOperationStatus.IN_PROGRESS
             )
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "statuses, expected_statuses",
         [
             ([GcpTransferOperationStatus.ABORTED], GcpTransferOperationStatus.ABORTED),
             (
@@ -527,7 +527,7 @@ class TestGCPTransferServiceHookWithPassedProjectId(unittest.TestCase):
                 [GcpTransferOperationStatus.PAUSED, GcpTransferOperationStatus.ABORTED],
                 (GcpTransferOperationStatus.ABORTED,),
             ),
-        ]
+        ],
     )
     def test_operations_contain_expected_statuses_green_path(self, statuses, expected_statuses):
         operations = [
@@ -542,8 +542,8 @@ class TestGCPTransferServiceHookWithPassedProjectId(unittest.TestCase):
         assert result
 
 
-class TestGCPTransferServiceHookWithProjectIdFromConnection(unittest.TestCase):
-    def setUp(self):
+class TestGCPTransferServiceHookWithProjectIdFromConnection:
+    def setup_method(self):
         with mock.patch(
             "airflow.providers.google.common.hooks.base_google.GoogleBaseHook.__init__",
             new=mock_base_gcp_hook_default_project_id,
@@ -743,8 +743,8 @@ class TestGCPTransferServiceHookWithProjectIdFromConnection(unittest.TestCase):
         return body
 
 
-class TestGCPTransferServiceHookWithoutProjectId(unittest.TestCase):
-    def setUp(self):
+class TestGCPTransferServiceHookWithoutProjectId:
+    def setup_method(self):
         with mock.patch(
             "airflow.providers.google.common.hooks.base_google.GoogleBaseHook.__init__",
             new=mock_base_gcp_hook_no_default_project_id,

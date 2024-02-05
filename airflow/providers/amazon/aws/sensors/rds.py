@@ -16,6 +16,7 @@
 # under the License.
 from __future__ import annotations
 
+from functools import cached_property
 from typing import TYPE_CHECKING, Sequence
 
 from airflow.exceptions import AirflowNotFoundException
@@ -28,16 +29,20 @@ if TYPE_CHECKING:
 
 
 class RdsBaseSensor(BaseSensorOperator):
-    """Base operator that implements common functions for all sensors"""
+    """Base operator that implements common functions for all sensors."""
 
     ui_color = "#ddbb77"
     ui_fgcolor = "#ffffff"
 
     def __init__(self, *args, aws_conn_id: str = "aws_conn_id", hook_params: dict | None = None, **kwargs):
-        hook_params = hook_params or {}
-        self.hook = RdsHook(aws_conn_id=aws_conn_id, **hook_params)
+        self.hook_params = hook_params or {}
+        self.aws_conn_id = aws_conn_id
         self.target_statuses: list[str] = []
         super().__init__(*args, **kwargs)
+
+    @cached_property
+    def hook(self):
+        return RdsHook(aws_conn_id=self.aws_conn_id, **self.hook_params)
 
 
 class RdsSnapshotExistenceSensor(RdsBaseSensor):
@@ -135,7 +140,7 @@ class RdsExportTaskExistenceSensor(RdsBaseSensor):
 
 class RdsDbSensor(RdsBaseSensor):
     """
-    Waits for an RDS instance or cluster to enter one of a number of states
+    Waits for an RDS instance or cluster to enter one of a number of states.
 
     .. seealso::
         For more information on how to use this sensor, take a look at the guide:

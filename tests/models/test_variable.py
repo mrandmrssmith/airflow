@@ -17,36 +17,36 @@
 # under the License.
 from __future__ import annotations
 
+import logging
 import os
-import unittest
 from unittest import mock
 
 import pytest
 from cryptography.fernet import Fernet
-from parameterized import parameterized
 
 from airflow import settings
 from airflow.models import Variable, crypto, variable
+from airflow.secrets.cache import SecretCache
 from airflow.secrets.metastore import MetastoreBackend
 from tests.test_utils import db
 from tests.test_utils.config import conf_vars
 
+pytestmark = pytest.mark.db_test
 
-class TestVariable(unittest.TestCase):
-    def setUp(self):
+
+class TestVariable:
+    @pytest.fixture(autouse=True)
+    def setup_test_cases(self):
         crypto._fernet = None
         db.clear_db_variables()
-        patcher = mock.patch("airflow.models.variable.mask_secret", autospec=True)
-        self.mask_secret = patcher.start()
-
-        self.addCleanup(patcher.stop)
-
-    def tearDown(self):
-        crypto._fernet = None
-
-    @classmethod
-    def tearDownClass(cls):
+        SecretCache.reset()
+        with conf_vars({("secrets", "use_cache"): "true"}):
+            SecretCache.init()
+        with mock.patch("airflow.models.variable.mask_secret", autospec=True) as m:
+            self.mask_secret = m
+            yield
         db.clear_db_variables()
+        crypto._fernet = None
 
     @conf_vars({("core", "fernet_key"): ""})
     def test_variable_no_encryption(self):
@@ -73,7 +73,7 @@ class TestVariable(unittest.TestCase):
         assert test_var.is_encrypted
         assert test_var.val == "value"
 
-    @parameterized.expand(["value", ""])
+    @pytest.mark.parametrize("test_value", ["value", ""])
     def test_var_with_encryption_rotate_fernet_key(self, test_value):
         """
         Tests rotating encrypted variables.
@@ -90,7 +90,7 @@ class TestVariable(unittest.TestCase):
             assert Fernet(key1).decrypt(test_var._val.encode()) == test_value.encode()
 
         # Test decrypt of old value with new key
-        with conf_vars({("core", "fernet_key"): ",".join([key2.decode(), key1.decode()])}):
+        with conf_vars({("core", "fernet_key"): f"{key2.decode()},{key1.decode()}"}):
             crypto._fernet = None
             assert test_var.val == test_value
 
@@ -104,15 +104,20 @@ class TestVariable(unittest.TestCase):
         Variable.set("tested_var_set_id", "Monday morning breakfast")
         assert "Monday morning breakfast" == Variable.get("tested_var_set_id")
 
-    def test_variable_set_with_env_variable(self):
+    def test_variable_set_with_env_variable(self, caplog):
+        caplog.set_level(logging.WARNING, logger=variable.log.name)
         Variable.set("key", "db-value")
-        with self.assertLogs(variable.log) as log_context:
-            with mock.patch.dict("os.environ", AIRFLOW_VAR_KEY="env-value"):
-                Variable.set("key", "new-db-value")
-                assert "env-value" == Variable.get("key")
-            assert "new-db-value" == Variable.get("key")
+        with mock.patch.dict("os.environ", AIRFLOW_VAR_KEY="env-value"):
+            # setting value while shadowed by an env variable will generate a warning
+            Variable.set("key", "new-db-value")
+            # value set above is not returned because the env variable value takes priority
+            assert "env-value" == Variable.get("key")
+        # invalidate the cache to re-evaluate value
+        SecretCache.invalidate_variable("key")
+        # now that env var is not here anymore, we see the value we set before.
+        assert "new-db-value" == Variable.get("key")
 
-        assert log_context.records[0].message == (
+        assert caplog.messages[0] == (
             "The variable key is defined in the EnvironmentVariablesBackend secrets backend, "
             "which takes precedence over reading from the database. The value in the database "
             "will be updated, but to read it you have to delete the conflicting variable from "
@@ -120,19 +125,17 @@ class TestVariable(unittest.TestCase):
         )
 
     @mock.patch("airflow.models.variable.ensure_secrets_loaded")
-    def test_variable_set_with_extra_secret_backend(self, mock_ensure_secrets):
-
+    def test_variable_set_with_extra_secret_backend(self, mock_ensure_secrets, caplog):
+        caplog.set_level(logging.WARNING, logger=variable.log.name)
         mock_backend = mock.Mock()
         mock_backend.get_variable.return_value = "secret_val"
         mock_backend.__class__.__name__ = "MockSecretsBackend"
         mock_ensure_secrets.return_value = [mock_backend, MetastoreBackend]
 
-        with self.assertLogs(variable.log) as log_context:
-            Variable.set("key", "new-db-value")
-
+        Variable.set("key", "new-db-value")
         assert Variable.get("key") == "secret_val"
 
-        assert log_context.records[0].message == (
+        assert caplog.messages[0] == (
             "The variable key is defined in the MockSecretsBackend secrets backend, "
             "which takes precedence over reading from the database. The value in the database "
             "will be updated, but to read it you have to delete the conflicting variable from "
@@ -258,7 +261,7 @@ class TestVariable(unittest.TestCase):
 
             self.mask_secret.reset_mock()
 
-            session.query(Variable).get(var.id)
+            session.get(Variable, var.id)
 
             assert self.mask_secret.mock_calls == [
                 # We should have called it _again_ when loading from the DB
@@ -266,3 +269,68 @@ class TestVariable(unittest.TestCase):
             ]
         finally:
             session.rollback()
+
+    @mock.patch("airflow.models.variable.ensure_secrets_loaded")
+    def test_caching_caches(self, mock_ensure_secrets: mock.Mock):
+        mock_backend = mock.Mock()
+        mock_backend.get_variable.return_value = "secret_val"
+        mock_backend.__class__.__name__ = "MockSecretsBackend"
+        mock_ensure_secrets.return_value = [mock_backend, MetastoreBackend]
+
+        key = "doesn't matter"
+        first = Variable.get(key)
+        second = Variable.get(key)
+
+        mock_backend.get_variable.assert_called_once()  # second call was not made because of cache
+        assert first == second
+
+    def test_cache_invalidation_on_set(self):
+        with mock.patch.dict("os.environ", AIRFLOW_VAR_KEY="from_env"):
+            a = Variable.get("key")  # value is saved in cache
+        with mock.patch.dict("os.environ", AIRFLOW_VAR_KEY="from_env_two"):
+            b = Variable.get("key")  # value from cache is used
+        assert a == b
+
+        # setting a new value invalidates the cache
+        Variable.set("key", "new_value")
+
+        c = Variable.get("key")  # cache should not be used
+
+        assert c != b
+
+
+@pytest.mark.parametrize(
+    "variable_value, deserialize_json, expected_masked_values",
+    [
+        ("s3cr3t", False, ["s3cr3t"]),
+        ('{"api_key": "s3cr3t"}', True, ["s3cr3t"]),
+        ('{"api_key": "s3cr3t", "normal_key": "normal_value"}', True, ["s3cr3t"]),
+        ('{"api_key": "s3cr3t", "another_secret": "123456"}', True, ["s3cr3t", "123456"]),
+    ],
+)
+def test_masking_only_secret_values(variable_value, deserialize_json, expected_masked_values):
+    from airflow.utils.log.secrets_masker import _secrets_masker
+
+    SecretCache.reset()
+
+    session = settings.Session()
+
+    try:
+        var = Variable(
+            key=f"password-{os.getpid()}",
+            val=variable_value,
+        )
+        session.add(var)
+        session.flush()
+
+        # Make sure we re-load it, not just get the cached object back
+        session.expunge(var)
+        _secrets_masker().patterns = set()
+
+        Variable.get(var.key, deserialize_json=deserialize_json)
+
+        for expected_masked_value in expected_masked_values:
+            assert expected_masked_value in _secrets_masker().patterns
+    finally:
+        session.rollback()
+        db.clear_db_variables()

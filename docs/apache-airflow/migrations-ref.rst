@@ -18,7 +18,7 @@
 Reference for Database Migrations
 '''''''''''''''''''''''''''''''''
 
-Here's the list of all the Database Migrations that are executed via when you run ``airflow db upgrade``.
+Here's the list of all the Database Migrations that are executed via when you run ``airflow db migrate``.
 
 .. warning::
 
@@ -27,8 +27,8 @@ Here's the list of all the Database Migrations that are executed via when you ru
    "DB conscious" users might perform an analysis on the migrations and draw conclusions about the impact
    of the migrations on their Airflow database. Those users might also want to take a look at the
    :doc:`database-erd-ref` document to understand how the internal DB of Airflow structure looks like.
-   However you should be aware that the structure is internal and you should not access the DB directly
-   to retrieve or modify any data - you should use :doc:`stable-rest-api-ref` to do that instead.
+   However, you should be aware that the structure is internal and you should not access the DB directly
+   to retrieve or modify any data - you should use the :doc:`REST API <stable-rest-api-ref>` to do that instead.
 
 
 
@@ -39,7 +39,30 @@ Here's the list of all the Database Migrations that are executed via when you ru
 +---------------------------------+-------------------+-------------------+--------------------------------------------------------------+
 | Revision ID                     | Revises ID        | Airflow Version   | Description                                                  |
 +=================================+===================+===================+==============================================================+
-| ``290244fb8b83`` (head)         | ``1986afd32c1b``  | ``2.5.0``         | Add is_orphaned to DatasetModel                              |
+| ``88344c1d9134`` (head)         | ``10b52ebd31f7``  | ``2.8.1``         | Drop unused TI index                                         |
++---------------------------------+-------------------+-------------------+--------------------------------------------------------------+
+| ``10b52ebd31f7``                | ``bd5dfbe21f88``  | ``2.8.0``         | Add processor_subdir to ImportError.                         |
++---------------------------------+-------------------+-------------------+--------------------------------------------------------------+
+| ``bd5dfbe21f88``                | ``f7bf2a57d0a6``  | ``2.8.0``         | Make connection login/password TEXT                          |
++---------------------------------+-------------------+-------------------+--------------------------------------------------------------+
+| ``f7bf2a57d0a6``                | ``375a816bbbf4``  | ``2.8.0``         | Add owner_display_name to (Audit) Log table                  |
++---------------------------------+-------------------+-------------------+--------------------------------------------------------------+
+| ``375a816bbbf4``                | ``405de8318b3a``  | ``2.8.0``         | add new field 'clear_number' to dagrun                       |
++---------------------------------+-------------------+-------------------+--------------------------------------------------------------+
+| ``405de8318b3a``                | ``788397e78828``  | ``2.7.0``         | add include_deferred column to pool                          |
++---------------------------------+-------------------+-------------------+--------------------------------------------------------------+
+| ``788397e78828``                | ``937cbd173ca1``  | ``2.7.0``         | Add custom_operator_name column                              |
++---------------------------------+-------------------+-------------------+--------------------------------------------------------------+
+| ``937cbd173ca1``                | ``c804e5c76e3e``  | ``2.7.0``         | Add index to task_instance table                             |
++---------------------------------+-------------------+-------------------+--------------------------------------------------------------+
+| ``c804e5c76e3e``                | ``98ae134e6fff``  | ``2.6.2``         | Add ``onupdate`` cascade to ``task_map`` table               |
++---------------------------------+-------------------+-------------------+--------------------------------------------------------------+
+| ``98ae134e6fff``                | ``6abdffdd4815``  | ``2.6.0``         | Increase length of user identifier columns in ``ab_user``    |
+|                                 |                   |                   | and ``ab_register_user`` tables                              |
++---------------------------------+-------------------+-------------------+--------------------------------------------------------------+
+| ``6abdffdd4815``                | ``290244fb8b83``  | ``2.6.0``         | add dttm index on log table                                  |
++---------------------------------+-------------------+-------------------+--------------------------------------------------------------+
+| ``290244fb8b83``                | ``1986afd32c1b``  | ``2.5.0``         | Add is_orphaned to DatasetModel                              |
 +---------------------------------+-------------------+-------------------+--------------------------------------------------------------+
 | ``1986afd32c1b``                | ``ee8d93fcc81e``  | ``2.5.0``         | Add DagRunNote and TaskInstanceNote                          |
 +---------------------------------+-------------------+-------------------+--------------------------------------------------------------+
@@ -310,6 +333,6 @@ Here's the list of all the Database Migrations that are executed via when you ru
 
  .. End of auto-generated table
 
-.. spelling::
+.. spelling:word-list::
     branchpoint
     mergepoint

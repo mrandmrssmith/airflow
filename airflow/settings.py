@@ -24,37 +24,38 @@ import logging
 import os
 import sys
 import warnings
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
-import pendulum
-import sqlalchemy
-from sqlalchemy import create_engine, exc
-from sqlalchemy.engine import Engine
+import pluggy
+from sqlalchemy import create_engine, exc, text
 from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlalchemy.orm.session import Session as SASession
 from sqlalchemy.pool import NullPool
 
+from airflow import policies
 from airflow.configuration import AIRFLOW_HOME, WEBSERVER_CONFIG, conf  # NOQA F401
 from airflow.exceptions import RemovedInAirflow3Warning
 from airflow.executors import executor_constants
 from airflow.logging_config import configure_logging
 from airflow.utils.orm_event_handlers import setup_event_handlers
+from airflow.utils.state import State
+from airflow.utils.timezone import local_timezone, parse_timezone, utc
 
 if TYPE_CHECKING:
+    from sqlalchemy.engine import Engine
+    from sqlalchemy.orm import Session as SASession
+
     from airflow.www.utils import UIAlert
 
 log = logging.getLogger(__name__)
 
-
-TIMEZONE = pendulum.tz.timezone("UTC")
 try:
-    tz = conf.get_mandatory_value("core", "default_timezone")
-    if tz == "system":
-        TIMEZONE = pendulum.tz.local_timezone()
+    if (tz := conf.get_mandatory_value("core", "default_timezone")) != "system":
+        TIMEZONE = parse_timezone(tz)
     else:
-        TIMEZONE = pendulum.tz.timezone(tz)
+        TIMEZONE = local_timezone()
 except Exception:
-    pass
+    TIMEZONE = utc
+
 log.info("Configured default timezone %s", TIMEZONE)
 
 
@@ -98,7 +99,6 @@ STATE_COLORS = {
     "restarting": "violet",
     "running": "lime",
     "scheduled": "tan",
-    "shutdown": "blue",
     "skipped": "hotpink",
     "success": "green",
     "up_for_reschedule": "turquoise",
@@ -116,7 +116,7 @@ def _get_rich_console(file):
 
 
 def custom_show_warning(message, category, filename, lineno, file=None, line=None):
-    """Custom function to print rich and visible warnings."""
+    """Print rich and visible warnings."""
     # Delay imports until we need it
     from rich.markup import escape
 
@@ -141,106 +141,47 @@ def replace_showwarning(replacement):
 original_show_warning = replace_showwarning(custom_show_warning)
 atexit.register(functools.partial(replace_showwarning, original_show_warning))
 
-
-def task_policy(task) -> None:
-    """
-    This policy setting allows altering tasks after they are loaded in the DagBag.
-
-    It allows administrator to rewire some task's parameters.
-    Alternatively you can raise ``AirflowClusterPolicyViolation`` exception
-    to stop DAG from being executed.
-
-    To define policy, add a ``airflow_local_settings`` module
-    to your PYTHONPATH that defines this ``task_policy`` function.
-
-    Here are a few examples of how this can be useful:
-
-    * You could enforce a specific queue (say the ``spark`` queue)
-        for tasks using the ``SparkOperator`` to make sure that these
-        tasks get wired to the right workers
-    * You could enforce a task timeout policy, making sure that no tasks run
-        for more than 48 hours
-
-    :param task: task to be mutated
-    """
+POLICY_PLUGIN_MANAGER: Any = None  # type: ignore
 
 
-def dag_policy(dag) -> None:
-    """
-    This policy setting allows altering DAGs after they are loaded in the DagBag.
+def task_policy(task):
+    return POLICY_PLUGIN_MANAGER.hook.task_policy(task=task)
 
-    It allows administrator to rewire some DAG's parameters.
-    Alternatively you can raise ``AirflowClusterPolicyViolation`` exception
-    to stop DAG from being executed.
 
-    To define policy, add a ``airflow_local_settings`` module
-    to your PYTHONPATH that defines this ``dag_policy`` function.
-
-    Here are a few examples of how this can be useful:
-
-    * You could enforce default user for DAGs
-    * Check if every DAG has configured tags
-
-    :param dag: dag to be mutated
-    """
+def dag_policy(dag):
+    return POLICY_PLUGIN_MANAGER.hook.dag_policy(dag=dag)
 
 
 def task_instance_mutation_hook(task_instance):
-    """
-    This setting allows altering task instances before being queued by the Airflow scheduler.
-
-    To define task_instance_mutation_hook, add a ``airflow_local_settings`` module
-    to your PYTHONPATH that defines this ``task_instance_mutation_hook`` function.
-
-    This could be used, for instance, to modify the task instance during retries.
-
-    :param task_instance: task instance to be mutated
-    """
+    return POLICY_PLUGIN_MANAGER.hook.task_instance_mutation_hook(task_instance=task_instance)
 
 
 task_instance_mutation_hook.is_noop = True  # type: ignore
 
 
 def pod_mutation_hook(pod):
-    """
-    Mutate pod before scheduling.
-
-    This setting allows altering ``kubernetes.client.models.V1Pod`` object
-    before they are passed to the Kubernetes client for scheduling.
-
-    To define a pod mutation hook, add a ``airflow_local_settings`` module
-    to your PYTHONPATH that defines this ``pod_mutation_hook`` function.
-    It receives a ``Pod`` object and can alter it where needed.
-
-    This could be used, for instance, to add sidecar or init containers
-    to every worker pod launched by KubernetesExecutor or KubernetesPodOperator.
-    """
+    return POLICY_PLUGIN_MANAGER.hook.pod_mutation_hook(pod=pod)
 
 
 def get_airflow_context_vars(context):
-    """
-    This setting allows getting the airflow context vars, which are key value pairs.
-    They are then injected to default airflow context vars, which in the end are
-    available as environment variables when running tasks
-    dag_id, task_id, execution_date, dag_run_id, try_number are reserved keys.
-    To define it, add a ``airflow_local_settings`` module
-    to your PYTHONPATH that defines this ``get_airflow_context_vars`` function.
-
-    :param context: The context for the task_instance of interest.
-    """
-    return {}
+    return POLICY_PLUGIN_MANAGER.hook.get_airflow_context_vars(context=context)
 
 
-def get_dagbag_import_timeout(dag_file_path: str) -> int | float:
-    """
-    This setting allows for dynamic control of the DAG file parsing timeout based on the DAG file path.
+def get_dagbag_import_timeout(dag_file_path: str):
+    return POLICY_PLUGIN_MANAGER.hook.get_dagbag_import_timeout(dag_file_path=dag_file_path)
 
-    It is useful when there are a few DAG files requiring longer parsing times, while others do not.
-    You can control them separately instead of having one value for all DAG files.
 
-    If the return value is less than or equal to 0, it means no timeout during the DAG parsing.
-    """
-    return conf.getfloat("core", "DAGBAG_IMPORT_TIMEOUT")
+def configure_policy_plugin_manager():
+    global POLICY_PLUGIN_MANAGER
+
+    POLICY_PLUGIN_MANAGER = pluggy.PluginManager(policies.local_settings_hookspec.project_name)
+    POLICY_PLUGIN_MANAGER.add_hookspecs(policies)
+    POLICY_PLUGIN_MANAGER.register(policies.DefaultPolicy)
+
+
+def load_policy_plugins(pm: pluggy.PluginManager):
+    # We can't log duration etc  here, as logging hasn't yet been configured!
+    pm.load_setuptools_entrypoints("airflow.policy")
 
 
 def configure_vars():
@@ -250,6 +191,7 @@ def configure_vars():
     global PLUGINS_FOLDER
     global DONOT_MODIFY_HANDLERS
     SQL_ALCHEMY_CONN = conf.get("database", "SQL_ALCHEMY_CONN")
+
     DAGS_FOLDER = os.path.expanduser(conf.get("core", "DAGS_FOLDER"))
 
     PLUGINS_FOLDER = conf.get("core", "plugins_folder", fallback=os.path.join(AIRFLOW_HOME, "plugins"))
@@ -262,13 +204,48 @@ def configure_vars():
     DONOT_MODIFY_HANDLERS = conf.getboolean("logging", "donot_modify_handlers", fallback=False)
 
 
+class SkipDBTestsSession:
+    """This fake session is used to skip DB tests when `_AIRFLOW_SKIP_DB_TESTS` is set."""
+
+    def __init__(self):
+        raise RuntimeError(
+            "Your test accessed the DB but `_AIRFLOW_SKIP_DB_TESTS` is set.\n"
+            "Either make sure your test does not use database or mark the test with `@pytest.mark.db_test`\n"
+            "See https://github.com/apache/airflow/blob/main/contributing-docs/testing/unit_tests.rst#"
+            "best-practices-for-db-tests on how "
+            "to deal with it and consult examples."
+        )
+
+    def remove(*args, **kwargs):
+        pass
+
+
 def configure_orm(disable_connection_pool=False, pool_class=None):
     """Configure ORM using SQLAlchemy."""
     from airflow.utils.log.secrets_masker import mask_secret
 
-    log.debug("Setting up DB connection pool (PID %s)", os.getpid())
-    global engine
+    if (
+        SQL_ALCHEMY_CONN
+        and SQL_ALCHEMY_CONN.startswith("sqlite")
+        and not SQL_ALCHEMY_CONN.startswith("sqlite:////")
+        # In memory is not useful for production, but useful for writing tests against Airflow for extensions
+        and SQL_ALCHEMY_CONN != "sqlite://"
+    ):
+        from airflow.exceptions import AirflowConfigException
+
+        raise AirflowConfigException(
+            f"Cannot use relative path: `{SQL_ALCHEMY_CONN}` to connect to sqlite. "
+            "Please use absolute path such as `sqlite:////tmp/airflow.db`."
+        )
+
     global Session
+    global engine
+    if os.environ.get("_AIRFLOW_SKIP_DB_TESTS") == "true":
+        # Skip DB initialization in unit tests, if DB tests are skipped
+        Session = SkipDBTestsSession
+        engine = None
+        return
+    log.debug("Setting up DB connection pool (PID %s)", os.getpid())
     engine_args = prepare_engine_args(disable_connection_pool, pool_class)
 
     if conf.has_option("database", "sql_alchemy_connect_args"):
@@ -276,7 +253,7 @@ def configure_orm(disable_connection_pool=False, pool_class=None):
     else:
         connect_args = {}
 
-    engine = create_engine(SQL_ALCHEMY_CONN, connect_args=connect_args, **engine_args)
+    engine = create_engine(SQL_ALCHEMY_CONN, connect_args=connect_args, **engine_args, future=True)
 
     mask_secret(engine.url.password)
 
@@ -290,27 +267,6 @@ def configure_orm(disable_connection_pool=False, pool_class=None):
             expire_on_commit=False,
         )
     )
-    if engine.dialect.name == "mssql":
-        session = Session()
-        try:
-            result = session.execute(
-                sqlalchemy.text(
-                    "SELECT is_read_committed_snapshot_on FROM sys.databases WHERE name=:database_name"
-                ),
-                params={"database_name": engine.url.database},
-            )
-            data = result.fetchone()[0]
-            if data != 1:
-                log.critical("MSSQL database MUST have READ_COMMITTED_SNAPSHOT enabled.")
-                log.critical("The database %s has it disabled.", engine.url.database)
-                log.critical("This will cause random deadlocks, Refusing to start.")
-                log.critical(
-                    "See https://airflow.apache.org/docs/apache-airflow/stable/howto/"
-                    "set-up-database.html#setting-up-a-mssql-database"
-                )
-                raise Exception("MSSQL database MUST have READ_COMMITTED_SNAPSHOT enabled.")
-        finally:
-            session.close()
 
 
 DEFAULT_ENGINE_ARGS = {
@@ -330,9 +286,7 @@ def prepare_engine_args(disable_connection_pool=False, pool_class=None):
             default_args = default.copy()
             break
 
-    engine_args: dict = conf.getjson(
-        "database", "sql_alchemy_engine_args", fallback=default_args
-    )  # type: ignore
+    engine_args: dict = conf.getjson("database", "sql_alchemy_engine_args", fallback=default_args)  # type: ignore
 
     if pool_class:
         # Don't use separate settings for size etc, only those from sql_alchemy_engine_args
@@ -368,7 +322,7 @@ def prepare_engine_args(disable_connection_pool=False, pool_class=None):
         # Typically, this is a simple statement like "SELECT 1", but may also make use
         # of some DBAPI-specific method to test the connection for liveness.
         # More information here:
-        # https://docs.sqlalchemy.org/en/13/core/pooling.html#disconnect-handling-pessimistic
+        # https://docs.sqlalchemy.org/en/14/core/pooling.html#disconnect-handling-pessimistic
         pool_pre_ping = conf.getboolean("database", "SQL_ALCHEMY_POOL_PRE_PING", fallback=True)
 
         log.debug(
@@ -390,12 +344,7 @@ def prepare_engine_args(disable_connection_pool=False, pool_class=None):
     # More information here:
     # https://dev.mysql.com/doc/refman/8.0/en/innodb-transaction-isolation-levels.html"
 
-    # Similarly MSSQL default isolation level should be set to READ COMMITTED.
-    # We also make sure that READ_COMMITTED_SNAPSHOT option is on, in order to avoid deadlocks when
-    # Select queries are running. This is by default enforced during init/upgrade. More information:
-    # https://docs.microsoft.com/en-us/sql/t-sql/statements/set-transaction-isolation-level-transact-sql
-
-    if SQL_ALCHEMY_CONN.startswith(("mysql", "mssql")):
+    if SQL_ALCHEMY_CONN.startswith("mysql"):
         engine_args["isolation_level"] = "READ COMMITTED"
 
     # Allow the user to specify an encoding for their DB otherwise default
@@ -411,7 +360,7 @@ def dispose_orm():
     global engine
     global Session
 
-    if Session:
+    if Session is not None:  # type: ignore[truthy-function]
         Session.remove()
         Session = None
     if engine:
@@ -453,14 +402,14 @@ def validate_session():
     """Validate ORM Session."""
     global engine
 
-    worker_precheck = conf.getboolean("celery", "worker_precheck", fallback=False)
+    worker_precheck = conf.getboolean("celery", "worker_precheck")
     if not worker_precheck:
         return True
     else:
         check_session = sessionmaker(bind=engine)
         session = check_session()
         try:
-            session.execute("select 1")
+            session.execute(text("select 1"))
             conn_status = True
         except exc.DBAPIError as err:
             log.error(err)
@@ -489,7 +438,7 @@ def prepare_syspath():
 
 
 def get_session_lifetime_config():
-    """Gets session timeout configs and handles outdated configs gracefully."""
+    """Get session timeout configs and handle outdated configs gracefully."""
     session_lifetime_minutes = conf.get("webserver", "session_lifetime_minutes", fallback=None)
     session_lifetime_days = conf.get("webserver", "session_lifetime_days", fallback=None)
     uses_deprecated_lifetime_configs = session_lifetime_days or conf.get(
@@ -522,30 +471,6 @@ def import_local_settings():
     """Import airflow_local_settings.py files to allow overriding any configs in settings.py file."""
     try:
         import airflow_local_settings
-
-        if hasattr(airflow_local_settings, "__all__"):
-            for i in airflow_local_settings.__all__:
-                globals()[i] = getattr(airflow_local_settings, i)
-        else:
-            for k, v in airflow_local_settings.__dict__.items():
-                if not k.startswith("__"):
-                    globals()[k] = v
-
-        # TODO: Remove once deprecated
-        if "policy" in globals() and "task_policy" not in globals():
-            warnings.warn(
-                "Using `policy` in airflow_local_settings.py is deprecated. "
-                "Please rename your `policy` to `task_policy`.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            globals()["task_policy"] = globals()["policy"]
-            del globals()["policy"]
-
-        if not hasattr(task_instance_mutation_hook, "is_noop"):
-            task_instance_mutation_hook.is_noop = False
-
-        log.info("Loaded airflow_local_settings from %s .", airflow_local_settings.__file__)
     except ModuleNotFoundError as e:
         if e.name == "airflow_local_settings":
             log.debug("No airflow_local_settings to import.", exc_info=True)
@@ -558,15 +483,50 @@ def import_local_settings():
     except ImportError:
         log.critical("Failed to import airflow_local_settings.", exc_info=True)
         raise
+    else:
+        if hasattr(airflow_local_settings, "__all__"):
+            names = set(airflow_local_settings.__all__)
+        else:
+            names = {n for n in airflow_local_settings.__dict__ if not n.startswith("__")}
+
+        if "policy" in names and "task_policy" not in names:
+            warnings.warn(
+                "Using `policy` in airflow_local_settings.py is deprecated. "
+                "Please rename your `policy` to `task_policy`.",
+                RemovedInAirflow3Warning,
+                stacklevel=2,
+            )
+            setattr(airflow_local_settings, "task_policy", airflow_local_settings.policy)
+            names.remove("policy")
+
+        plugin_functions = policies.make_plugin_from_local_settings(
+            POLICY_PLUGIN_MANAGER, airflow_local_settings, names
+        )
+
+        # If we have already handled a function by adding it to the plugin,
+        # then don't clobber the global function
+        for name in names - plugin_functions:
+            globals()[name] = getattr(airflow_local_settings, name)
+
+        if POLICY_PLUGIN_MANAGER.hook.task_instance_mutation_hook.get_hookimpls():
+            task_instance_mutation_hook.is_noop = False
+
+        log.info("Loaded airflow_local_settings from %s .", airflow_local_settings.__file__)
 
 
 def initialize():
     """Initialize Airflow with all the settings from this file."""
     configure_vars()
     prepare_syspath()
+    configure_policy_plugin_manager()
+    # Load policy plugins _before_ importing airflow_local_settings, as Pluggy uses LIFO and we want anything
+    # in airflow_local_settings to take precendec
+    load_policy_plugins(POLICY_PLUGIN_MANAGER)
     import_local_settings()
     global LOGGING_CLASS_PATH
     LOGGING_CLASS_PATH = configure_logging()
+    State.state_color.update(STATE_COLORS)
+
     configure_adapters()
     # The webservers import this file from models.py with the default settings.
     configure_orm()
@@ -611,12 +571,12 @@ USE_JOB_SCHEDULE = conf.getboolean("scheduler", "use_job_schedule", fallback=Tru
 
 # By default Airflow plugins are lazily-loaded (only loaded when required). Set it to False,
 # if you want to load plugins whenever 'airflow' is invoked via cli or loaded from module.
-LAZY_LOAD_PLUGINS = conf.getboolean("core", "lazy_load_plugins", fallback=True)
+LAZY_LOAD_PLUGINS: bool = conf.getboolean("core", "lazy_load_plugins", fallback=True)
 
 # By default Airflow providers are lazily-discovered (discovery and imports happen only when required).
 # Set it to False, if you want to discover providers whenever 'airflow' is invoked via cli or
 # loaded from module.
-LAZY_LOAD_PROVIDERS = conf.getboolean("core", "lazy_discover_providers", fallback=True)
+LAZY_LOAD_PROVIDERS: bool = conf.getboolean("core", "lazy_discover_providers", fallback=True)
 
 # Determines if the executor utilizes Kubernetes
 IS_K8S_OR_K8SCELERY_EXECUTOR = conf.get("core", "EXECUTOR") in {
@@ -624,6 +584,12 @@ IS_K8S_OR_K8SCELERY_EXECUTOR = conf.get("core", "EXECUTOR") in {
     executor_constants.CELERY_KUBERNETES_EXECUTOR,
     executor_constants.LOCAL_KUBERNETES_EXECUTOR,
 }
+
+# Executors can set this to true to configure logging correctly for
+# containerized executors.
+IS_EXECUTOR_CONTAINER = bool(os.environ.get("AIRFLOW_IS_EXECUTOR_CONTAINER", ""))
+IS_K8S_EXECUTOR_POD = bool(os.environ.get("AIRFLOW_IS_K8S_EXECUTOR_POD", ""))
+"""Will be True if running in kubernetes executor pod."""
 
 HIDE_SENSITIVE_VAR_CONN_FIELDS = conf.getboolean("core", "hide_sensitive_var_conn_fields")
 
@@ -650,3 +616,26 @@ DASHBOARD_UIALERTS: list[UIAlert] = []
 AIRFLOW_MOVED_TABLE_PREFIX = "_airflow_moved"
 
 DAEMON_UMASK: str = conf.get("core", "daemon_umask", fallback="0o077")
+
+SMTP_DEFAULT_TEMPLATED_SUBJECT = """
+{% if ti is defined %}
+DAG {{ ti.dag_id }} - Task {{ ti.task_id }} - Run ID {{ ti.run_id }} in State {{ ti.state }}
+{% elif slas is defined %}
+SLA Missed for DAG {{ dag.dag_id }} - Task {{ slas[0].task_id }}
+{% endif %}
+"""
+
+SMTP_DEFAULT_TEMPLATED_HTML_CONTENT_PATH = os.path.join(
+    os.path.dirname(__file__), "providers", "smtp", "notifications", "templates", "email.html"
+)
+
+
+# AIP-44: internal_api (experimental)
+# This feature is not complete yet, so we disable it by default.
+_ENABLE_AIP_44: bool = os.environ.get("AIRFLOW_ENABLE_AIP_44", "false").lower() in {
+    "true",
+    "t",
+    "yes",
+    "y",
+    "1",
+}

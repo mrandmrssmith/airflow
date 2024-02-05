@@ -17,13 +17,15 @@
 from __future__ import annotations
 
 import contextlib
-import io
-import json
+import os
 import runpy
+from io import StringIO
 from unittest import mock
 
 import pytest
 import time_machine
+
+from tests.test_utils import AIRFLOW_MAIN_FOLDER
 
 
 class TestGetEksToken:
@@ -68,18 +70,16 @@ class TestGetEksToken:
             mock_eks_hook.return_value.fetch_access_token_for_cluster.return_value
         ) = "k8s-aws-v1.aHR0cDovL2V4YW1wbGUuY29t"
 
-        with mock.patch("sys.argv", args), contextlib.redirect_stdout(io.StringIO()) as temp_stdout:
-            runpy.run_module("airflow.providers.amazon.aws.utils.eks_get_token", run_name="__main__")
-
-        assert {
-            "apiVersion": "client.authentication.k8s.io/v1alpha1",
-            "kind": "ExecCredential",
-            "spec": {},
-            "status": {
-                "expirationTimestamp": "1995-02-14T00:14:00Z",
-                "token": "k8s-aws-v1.aHR0cDovL2V4YW1wbGUuY29t",
-            },
-        } == json.loads(temp_stdout.getvalue())
+        with mock.patch("sys.argv", args), contextlib.redirect_stdout(StringIO()) as temp_stdout:
+            os.chdir(AIRFLOW_MAIN_FOLDER)
+            # We are not using run_module because of https://github.com/pytest-dev/pytest/issues/9007
+            runpy.run_path("airflow/providers/amazon/aws/utils/eks_get_token.py", run_name="__main__")
+        output = temp_stdout.getvalue()
+        token = "token: k8s-aws-v1.aHR0cDovL2V4YW1wbGUuY29t"
+        expected_token = output.split(",")[1].strip()
+        expected_expiration_timestamp = output.split(",")[0].split(":")[1].strip()
+        assert expected_token == token
+        assert expected_expiration_timestamp.startswith("1995-02-")
         mock_eks_hook.assert_called_once_with(
             aws_conn_id=expected_aws_conn_id, region_name=expected_region_name
         )

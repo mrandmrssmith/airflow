@@ -20,8 +20,9 @@ from __future__ import annotations
 import contextlib
 import os
 import pathlib
+import shutil
+from functools import cached_property
 
-from airflow.compat.functools import cached_property
 from airflow.configuration import conf
 from airflow.providers.alibaba.cloud.hooks.oss import OSSHook
 from airflow.utils.log.file_task_handler import FileTaskHandler
@@ -30,12 +31,12 @@ from airflow.utils.log.logging_mixin import LoggingMixin
 
 class OSSTaskHandler(FileTaskHandler, LoggingMixin):
     """
-    OSSTaskHandler is a python log handler that handles and reads
-    task instance logs. It extends airflow FileTaskHandler and
-    uploads to and reads from OSS remote storage.
+    OSSTaskHandler is a python log handler that handles and reads task instance logs.
+
+    Extends airflow FileTaskHandler and uploads to and reads from OSS remote storage.
     """
 
-    def __init__(self, base_log_folder, oss_log_folder, filename_template=None):
+    def __init__(self, base_log_folder, oss_log_folder, filename_template=None, **kwargs):
         self.log.info("Using oss_task_handler for remote logging...")
         super().__init__(base_log_folder, filename_template)
         (self.bucket_name, self.base_folder) = OSSHook.parse_oss_url(oss_log_folder)
@@ -43,6 +44,9 @@ class OSSTaskHandler(FileTaskHandler, LoggingMixin):
         self._hook = None
         self.closed = False
         self.upload_on_close = True
+        self.delete_local_copy = kwargs.get(
+            "delete_local_copy", conf.getboolean("logging", "delete_local_logs")
+        )
 
     @cached_property
     def hook(self):
@@ -60,7 +64,7 @@ class OSSTaskHandler(FileTaskHandler, LoggingMixin):
             )
 
     def set_context(self, ti):
-        """This function is used to set the context of the handler"""
+        """Set the context of the handler."""
         super().set_context(ti)
         # Local location and remote location is needed to open and
         # upload local log file to OSS remote storage.
@@ -92,7 +96,9 @@ class OSSTaskHandler(FileTaskHandler, LoggingMixin):
         if os.path.exists(local_loc):
             # read log and remove old logs to get just the latest additions
             log = pathlib.Path(local_loc).read_text()
-            self.oss_write(log, remote_loc)
+            oss_write = self.oss_write(log, remote_loc)
+            if oss_write and self.delete_local_copy:
+                shutil.rmtree(os.path.dirname(local_loc))
 
         # Mark closed so we don't double write if close is called twice
         self.closed = True
@@ -100,6 +106,7 @@ class OSSTaskHandler(FileTaskHandler, LoggingMixin):
     def _read(self, ti, try_number, metadata=None):
         """
         Read logs of given task instance and try_number from OSS remote storage.
+
         If failed, read the log from task instance host machine.
 
         :param ti: task instance object
@@ -108,8 +115,8 @@ class OSSTaskHandler(FileTaskHandler, LoggingMixin):
                          can be used for steaming log reading and auto-tailing.
         """
         # Explicitly getting log relative path is necessary as the given
-        # task instance might be different than task instance passed in
-        # in set_context method.
+        # task instance might be different from task instance passed in
+        # set_context method.
         log_relative_path = self._render_filename(ti, try_number)
         remote_loc = log_relative_path
 
@@ -124,7 +131,7 @@ class OSSTaskHandler(FileTaskHandler, LoggingMixin):
 
     def oss_log_exists(self, remote_log_location):
         """
-        Check if remote_log_location exists in remote storage
+        Check if remote_log_location exists in remote storage.
 
         :param remote_log_location: log's location in remote storage
         :return: True if location exists else False
@@ -136,12 +143,11 @@ class OSSTaskHandler(FileTaskHandler, LoggingMixin):
 
     def oss_read(self, remote_log_location, return_error=False):
         """
-        Returns the log found at the remote_log_location. Returns '' if no
-        logs are found or there is an error.
+        Return the log at the remote_log_location or '' if no logs are found or there is an error.
 
         :param remote_log_location: the log's location in remote storage
         :param return_error: if True, returns a string error message if an
-            error occurs. Otherwise returns '' when an error occurs.
+            error occurs. Otherwise, returns '' when an error occurs.
         """
         try:
             oss_remote_log_location = f"{self.base_folder}/{remote_log_location}"
@@ -154,22 +160,22 @@ class OSSTaskHandler(FileTaskHandler, LoggingMixin):
             if return_error:
                 return msg
 
-    def oss_write(self, log, remote_log_location, append=True):
+    def oss_write(self, log, remote_log_location, append=True) -> bool:
         """
-        Writes the log to the remote_log_location. Fails silently if no hook
-        was created.
+        Write the log to remote_log_location and return `True`; fails silently and returns `False` on error.
 
         :param log: the log to write to the remote_log_location
         :param remote_log_location: the log's location in remote storage
         :param append: if False, any existing log file is overwritten. If True,
             the new log is appended to any existing logs.
+        :return: whether the log is successfully written to remote location or not.
         """
         oss_remote_log_location = f"{self.base_folder}/{remote_log_location}"
         pos = 0
         if append and self.oss_log_exists(oss_remote_log_location):
             head = self.hook.head_key(self.bucket_name, oss_remote_log_location)
             pos = head.content_length
-        self.log.info("log write pos is: %s", str(pos))
+        self.log.info("log write pos is: %s", pos)
         try:
             self.log.info("writing remote log: %s", oss_remote_log_location)
             self.hook.append_string(self.bucket_name, log, oss_remote_log_location, pos)
@@ -177,6 +183,8 @@ class OSSTaskHandler(FileTaskHandler, LoggingMixin):
             self.log.exception(
                 "Could not write logs to %s, log write pos is: %s, Append is %s",
                 oss_remote_log_location,
-                str(pos),
-                str(append),
+                pos,
+                append,
             )
+            return False
+        return True

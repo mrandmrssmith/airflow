@@ -19,27 +19,33 @@ from __future__ import annotations
 import os
 from datetime import datetime, timedelta
 
+import pytest
+
 from airflow import DAG
 from airflow.models.baseoperator import chain
-from airflow.providers.microsoft.azure.operators.asb import (
-    ASBReceiveSubscriptionMessageOperator,
-    AzureServiceBusCreateQueueOperator,
-    AzureServiceBusDeleteQueueOperator,
-    AzureServiceBusReceiveMessageOperator,
-    AzureServiceBusSendMessageOperator,
-    AzureServiceBusSubscriptionCreateOperator,
-    AzureServiceBusSubscriptionDeleteOperator,
-    AzureServiceBusTopicCreateOperator,
-    AzureServiceBusTopicDeleteOperator,
-    AzureServiceBusUpdateSubscriptionOperator,
-)
+
+try:
+    from airflow.providers.microsoft.azure.operators.asb import (
+        ASBReceiveSubscriptionMessageOperator,
+        AzureServiceBusCreateQueueOperator,
+        AzureServiceBusDeleteQueueOperator,
+        AzureServiceBusReceiveMessageOperator,
+        AzureServiceBusSendMessageOperator,
+        AzureServiceBusSubscriptionCreateOperator,
+        AzureServiceBusSubscriptionDeleteOperator,
+        AzureServiceBusTopicCreateOperator,
+        AzureServiceBusTopicDeleteOperator,
+        AzureServiceBusUpdateSubscriptionOperator,
+    )
+except ImportError:
+    pytest.skip("Azure Service Bus not available", allow_module_level=True)
 
 EXECUTION_TIMEOUT = int(os.getenv("EXECUTION_TIMEOUT", 6))
 
 CLIENT_ID = os.getenv("CLIENT_ID", "")
 QUEUE_NAME = "sb_mgmt_queue_test"
 MESSAGE = "Test Message"
-MESSAGE_LIST = [MESSAGE + " " + str(n) for n in range(0, 10)]
+MESSAGE_LIST = [f"{MESSAGE} {n}" for n in range(10)]
 TOPIC_NAME = "sb_mgmt_topic_test"
 SUBSCRIPTION_NAME = "sb_mgmt_subscription"
 

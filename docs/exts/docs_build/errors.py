@@ -23,7 +23,9 @@ from typing import NamedTuple
 from rich.console import Console
 
 from airflow.utils.code_utils import prepare_code_snippet
-from docs.exts.docs_build.code_utils import CONSOLE_WIDTH
+
+from docs.exts.docs_build.code_utils import CONSOLE_WIDTH  # isort:skip (needed to workaround isort bug)
+
 
 CURRENT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__)))
 DOCS_DIR = os.path.abspath(os.path.join(CURRENT_DIR, os.pardir, os.pardir))
@@ -93,7 +95,7 @@ def parse_sphinx_warnings(warning_text: str, docs_dir: str) -> list[DocBuildErro
     :return: list of DocBuildErrors.
     """
     sphinx_build_errors = []
-    for sphinx_warning in warning_text.split("\n"):
+    for sphinx_warning in warning_text.splitlines():
         if not sphinx_warning:
             continue
         warning_parts = sphinx_warning.split(":", 2)

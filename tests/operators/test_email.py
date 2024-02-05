@@ -18,13 +18,16 @@
 from __future__ import annotations
 
 import datetime
-import unittest
 from unittest import mock
+
+import pytest
 
 from airflow.models.dag import DAG
 from airflow.operators.email import EmailOperator
 from airflow.utils import timezone
 from tests.test_utils.config import conf_vars
+
+pytestmark = pytest.mark.db_test
 
 DEFAULT_DATE = timezone.datetime(2016, 1, 1)
 END_DATE = timezone.datetime(2016, 1, 2)
@@ -34,15 +37,13 @@ FROZEN_NOW = timezone.datetime(2016, 1, 2, 12, 1, 1)
 send_email_test = mock.Mock()
 
 
-class TestEmailOperator(unittest.TestCase):
-    def setUp(self):
-        super().setUp()
+class TestEmailOperator:
+    def setup_class(self):
         self.dag = DAG(
             "test_dag",
             default_args={"owner": "airflow", "start_date": DEFAULT_DATE},
             schedule=INTERVAL,
         )
-        self.addCleanup(self.dag.clear)
 
     def _run_as_operator(self, **kwargs):
         task = EmailOperator(
@@ -56,11 +57,12 @@ class TestEmailOperator(unittest.TestCase):
             **kwargs,
         )
         task.run(start_date=DEFAULT_DATE, end_date=DEFAULT_DATE)
+        self.dag.clear()
 
     def test_execute(self):
         with conf_vars({("email", "email_backend"): "tests.operators.test_email.send_email_test"}):
             self._run_as_operator()
         assert send_email_test.call_count == 1
-        call_args = send_email_test.call_args[1]
+        call_args = send_email_test.call_args.kwargs
         assert call_args["files"] == ["/tmp/Report-A-2016-01-01.csv"]
         assert call_args["custom_headers"] == {"Reply-To": "reply_to@example.com"}

@@ -18,34 +18,36 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import os
 from unittest import mock
 
 import boto3
-import moto
 import pytest
 from botocore.exceptions import ClientError
+from moto import mock_aws
 
 from airflow.models import DAG, DagRun, TaskInstance
 from airflow.operators.empty import EmptyOperator
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.providers.amazon.aws.log.s3_task_handler import S3TaskHandler
 from airflow.utils.session import create_session
-from airflow.utils.state import State
+from airflow.utils.state import State, TaskInstanceState
 from airflow.utils.timezone import datetime
 from tests.test_utils.config import conf_vars
 
 
-@pytest.fixture(autouse=True, scope="module")
+@pytest.fixture(autouse=True)
 def s3mock():
-    with moto.mock_s3():
+    with mock_aws():
         yield
 
 
+@pytest.mark.db_test
 class TestS3TaskHandler:
     @conf_vars({("logging", "remote_log_conn_id"): "aws_default"})
     @pytest.fixture(autouse=True)
-    def setup(self, create_log_template, tmp_path_factory):
+    def setup_tests(self, create_log_template, tmp_path_factory):
         self.remote_log_base = "s3://bucket/remote/log/location"
         self.remote_log_location = "s3://bucket/remote/log/location/1.log"
         self.remote_log_key = "remote/log/location/1.log"
@@ -70,9 +72,6 @@ class TestS3TaskHandler:
         self.ti.state = State.RUNNING
 
         self.conn = boto3.client("s3")
-        # We need to create the bucket since this is all in Moto's 'virtual'
-        # AWS account
-        moto.moto_api._internal.models.moto_api_backend.reset()
         self.conn.create_bucket(Bucket="bucket")
 
         yield
@@ -126,20 +125,25 @@ class TestS3TaskHandler:
 
     def test_read(self):
         self.conn.put_object(Bucket="bucket", Key=self.remote_log_key, Body=b"Log line\n")
-        log, metadata = self.s3_task_handler.read(self.ti)
-        assert (
-            log[0][0][-1]
-            == "*** Reading remote log from s3://bucket/remote/log/location/1.log.\nLog line\n\n"
-        )
-        assert metadata == [{"end_of_log": True}]
+        ti = copy.copy(self.ti)
+        ti.state = TaskInstanceState.SUCCESS
+        log, metadata = self.s3_task_handler.read(ti)
+        actual = log[0][0][-1]
+        expected = "*** Found logs in s3:\n***   * s3://bucket/remote/log/location/1.log\nLog line"
+        assert actual == expected
+        assert metadata == [{"end_of_log": True, "log_pos": 8}]
 
     def test_read_when_s3_log_missing(self):
-        log, metadata = self.s3_task_handler.read(self.ti)
-
+        ti = copy.copy(self.ti)
+        ti.state = TaskInstanceState.SUCCESS
+        self.s3_task_handler._read_from_logs_server = mock.Mock(return_value=([], []))
+        log, metadata = self.s3_task_handler.read(ti)
         assert 1 == len(log)
         assert len(log) == len(metadata)
-        assert "*** Log file does not exist:" in log[0][0][-1]
-        assert {"end_of_log": True} == metadata[0]
+        actual = log[0][0][-1]
+        expected = "*** No logs found on s3 for ti=<TaskInstance: dag_for_testing_s3_task_handler.task_for_testing_s3_log_handler test [success]>\n"
+        assert actual == expected
+        assert {"end_of_log": True, "log_pos": 0} == metadata[0]
 
     def test_s3_read_when_log_missing(self):
         handler = self.s3_task_handler
@@ -204,3 +208,18 @@ class TestS3TaskHandler:
 
         with pytest.raises(ClientError):
             boto3.resource("s3").Object("bucket", self.remote_log_key).get()
+
+    @pytest.mark.parametrize(
+        "delete_local_copy, expected_existence_of_local_copy",
+        [(True, False), (False, True)],
+    )
+    def test_close_with_delete_local_logs_conf(self, delete_local_copy, expected_existence_of_local_copy):
+        with conf_vars({("logging", "delete_local_logs"): str(delete_local_copy)}):
+            handler = S3TaskHandler(self.local_log_location, self.remote_log_base)
+
+        handler.log.info("test")
+        handler.set_context(self.ti)
+        assert handler.upload_on_close
+
+        handler.close()
+        assert os.path.exists(handler.handler.baseFilename) == expected_existence_of_local_copy

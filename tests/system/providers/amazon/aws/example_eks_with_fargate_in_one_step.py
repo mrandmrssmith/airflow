@@ -29,17 +29,7 @@ from airflow.providers.amazon.aws.operators.eks import (
 from airflow.providers.amazon.aws.sensors.eks import EksClusterStateSensor, EksFargateProfileStateSensor
 from airflow.utils.trigger_rule import TriggerRule
 from tests.system.providers.amazon.aws.utils import ENV_ID_KEY, SystemTestContextBuilder
-from tests.system.providers.amazon.aws.utils.ec2 import (
-    create_address_allocation,
-    create_nat_gateway,
-    create_private_subnets,
-    create_route_table,
-    delete_nat_gateway,
-    delete_route_table,
-    delete_subnets,
-    get_default_vpc_id,
-    remove_address_allocation,
-)
+from tests.system.providers.amazon.aws.utils.k8s import get_describe_pod_operator
 
 DAG_ID = "example_eks_with_fargate_in_one_step"
 
@@ -48,13 +38,13 @@ DAG_ID = "example_eks_with_fargate_in_one_step"
 CLUSTER_ROLE_ARN_KEY = "CLUSTER_ROLE_ARN"
 # See https://docs.aws.amazon.com/eks/latest/userguide/pod-execution-role.html
 FARGATE_POD_ROLE_ARN_KEY = "FARGATE_POD_ROLE_ARN"
-PUBLIC_SUBNET_ID_KEY = "PUBLIC_SUBNET_ID"
+SUBNETS_KEY = "SUBNETS"
 
 sys_test_context_task = (
     SystemTestContextBuilder()
     .add_variable(CLUSTER_ROLE_ARN_KEY)
     .add_variable(FARGATE_POD_ROLE_ARN_KEY)
-    .add_variable(PUBLIC_SUBNET_ID_KEY)
+    .add_variable(SUBNETS_KEY, split_string=True)
     .build()
 )
 
@@ -69,19 +59,11 @@ with DAG(
     env_id = test_context[ENV_ID_KEY]
     cluster_role_arn = test_context[CLUSTER_ROLE_ARN_KEY]
     fargate_pod_role_arn = test_context[FARGATE_POD_ROLE_ARN_KEY]
-    public_subnet_id = test_context[PUBLIC_SUBNET_ID_KEY]
+    subnets = test_context[SUBNETS_KEY]
 
     cluster_name = f"{env_id}-cluster"
     fargate_profile_name = f"{env_id}-profile"
     test_name = f"{env_id}_{DAG_ID}"
-
-    vpc_id = get_default_vpc_id()
-    allocation = create_address_allocation()
-    nat_gateway = create_nat_gateway(allocation_id=allocation, subnet_id=public_subnet_id)
-    route_table = create_route_table(vpc_id=vpc_id, nat_gateway_id=nat_gateway, test_name=test_name)
-    subnets = create_private_subnets(
-        vpc_id=vpc_id, route_table_id=route_table, test_name=test_name, number_to_make=2
-    )
 
     # [START howto_operator_eks_create_cluster_with_fargate_profile]
     # Create an Amazon EKS cluster control plane and an AWS Fargate compute platform in one step.
@@ -118,9 +100,15 @@ with DAG(
         labels={"demo": "hello_world"},
         get_logs=True,
         startup_timeout_seconds=600,
-        # Delete the pod when it reaches its final state, or the execution is interrupted.
-        is_delete_operator_pod=True,
+        # Keep the pod alive, so we can describe it in case of trouble. It's deleted with the cluster anyway.
+        on_finish_action="keep_pod",
     )
+
+    describe_pod = get_describe_pod_operator(
+        cluster_name, pod_name="{{ ti.xcom_pull(key='pod_name', task_ids='run_pod') }}"
+    )
+    # only describe the pod if the task above failed, to help diagnose
+    describe_pod.trigger_rule = TriggerRule.ONE_FAILED
 
     # An Amazon EKS cluster can not be deleted with attached resources such as nodegroups or Fargate profiles.
     # Setting the `force` to `True` will delete any attached resources before deleting the cluster.
@@ -136,25 +124,20 @@ with DAG(
         trigger_rule=TriggerRule.ALL_DONE,
         cluster_name=cluster_name,
         target_state=ClusterStates.NONEXISTENT,
+        poke_interval=10,
     )
 
     chain(
         # TEST SETUP
         test_context,
-        nat_gateway,
-        route_table,
-        subnets,
         # TEST BODY
         create_cluster_and_fargate_profile,
         await_create_fargate_profile,
         start_pod,
+        # TEST TEARDOWN
+        describe_pod,
         delete_cluster_and_fargate_profile,
         await_delete_cluster,
-        # TEST TEARDOWN
-        delete_subnets(subnets),
-        delete_route_table(route_table),
-        delete_nat_gateway(nat_gateway),
-        remove_address_allocation(allocation),
     )
 
     from tests.system.utils.watcher import watcher

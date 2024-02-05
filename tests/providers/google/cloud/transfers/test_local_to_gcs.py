@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import datetime
 import os
-import unittest
 from glob import glob
 from unittest import mock
 
@@ -28,12 +27,13 @@ import pytest
 from airflow.models.dag import DAG
 from airflow.providers.google.cloud.transfers.local_to_gcs import LocalFilesystemToGCSOperator
 
+pytestmark = pytest.mark.db_test
 
-class TestFileToGcsOperator(unittest.TestCase):
 
+class TestFileToGcsOperator:
     _config = {"bucket": "dummy", "mime_type": "application/octet-stream", "gzip": False}
 
-    def setUp(self):
+    def setup_method(self):
         args = {"owner": "airflow", "start_date": datetime.datetime(2017, 1, 1)}
         self.dag = DAG("test_dag_id", default_args=args)
         self.testfile1 = "/tmp/fake1.csv"
@@ -44,7 +44,7 @@ class TestFileToGcsOperator(unittest.TestCase):
             f.write(b"x" * 393216)
         self.testfiles = [self.testfile1, self.testfile2]
 
-    def tearDown(self):
+    def teardown_method(self):
         os.remove(self.testfile1)
         os.remove(self.testfile2)
 
@@ -81,6 +81,7 @@ class TestFileToGcsOperator(unittest.TestCase):
             object_name="test/test1.csv",
         )
 
+    @pytest.mark.db_test
     def test_execute_with_empty_src(self):
         operator = LocalFilesystemToGCSOperator(
             task_id="local_to_sensor",

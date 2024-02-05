@@ -16,8 +16,7 @@
 # under the License.
 from __future__ import annotations
 
-import unittest
-from unittest import TestCase, mock
+from unittest import mock
 
 from google.api_core.gapic_v1.method import DEFAULT
 
@@ -33,6 +32,7 @@ from airflow.providers.google.cloud.operators.dataform import (
     DataformGetWorkflowInvocationOperator,
     DataformInstallNpmPackagesOperator,
     DataformMakeDirectoryOperator,
+    DataformQueryWorkflowInvocationActionsOperator,
     DataformRemoveDirectoryOperator,
     DataformRemoveFileOperator,
     DataformWriteFileOperator,
@@ -40,6 +40,7 @@ from airflow.providers.google.cloud.operators.dataform import (
 
 HOOK_STR = "airflow.providers.google.cloud.operators.dataform.DataformHook"
 WORKFLOW_INVOCATION_STR = "airflow.providers.google.cloud.operators.dataform.WorkflowInvocation"
+WORKFLOW_INVOCATION_ACTION_STR = "airflow.providers.google.cloud.operators.dataform.WorkflowInvocationAction"
 COMPILATION_RESULT_STR = "airflow.providers.google.cloud.operators.dataform.CompilationResult"
 REPOSITORY_STR = "airflow.providers.google.cloud.operators.dataform.Repository"
 WORKSPACE_STR = "airflow.providers.google.cloud.operators.dataform.Workspace"
@@ -56,7 +57,6 @@ WORKSPACE_ID = "test_workspace_id"
 WORKSPACE = f"projects/{PROJECT_ID}/locations/{REGION}/repositories/{REPOSITORY_ID}/workspaces/{WORKSPACE_ID}"
 COMPILATION_RESULT_ID = "test_compilation_result_id"
 GCP_CONN_ID = "google_cloud_default"
-DELEGATE_TO = "test-delegate-to"
 IMPERSONATION_CHAIN = ["ACCOUNT_1", "ACCOUNT_2", "ACCOUNT_3"]
 FILEPATH = "path/to/file.txt"
 FILE_CONTENT = b"test content"
@@ -71,7 +71,7 @@ WORKFLOW_INVOCATION = {
 WORKFLOW_INVOCATION_ID = "test_workflow_invocation"
 
 
-class TestDataformCreateCompilationResult(unittest.TestCase):
+class TestDataformCreateCompilationResult:
     @mock.patch(HOOK_STR)
     @mock.patch(COMPILATION_RESULT_STR)
     def test_execute(self, compilation_result_mock, hook_mock):
@@ -99,7 +99,7 @@ class TestDataformCreateCompilationResult(unittest.TestCase):
         )
 
 
-class TestDataformGetCompilationResultOperator(TestCase):
+class TestDataformGetCompilationResultOperator:
     @mock.patch(HOOK_STR)
     @mock.patch(COMPILATION_RESULT_STR)
     def test_execute(self, compilation_result_mock, hook_mock):
@@ -123,7 +123,7 @@ class TestDataformGetCompilationResultOperator(TestCase):
         )
 
 
-class TestDataformCreateWorkflowInvocationOperator(TestCase):
+class TestDataformCreateWorkflowInvocationOperator:
     @mock.patch(HOOK_STR)
     @mock.patch(WORKFLOW_INVOCATION_STR)
     def test_execute(self, workflow_invocation_str, hook_mock):
@@ -148,7 +148,7 @@ class TestDataformCreateWorkflowInvocationOperator(TestCase):
         )
 
 
-class TestDataformGetWorkflowInvocationOperator(TestCase):
+class TestDataformGetWorkflowInvocationOperator:
     @mock.patch(HOOK_STR)
     @mock.patch(WORKFLOW_INVOCATION_STR)
     def test_execute(self, workflow_invocation_str, hook_mock):
@@ -174,7 +174,33 @@ class TestDataformGetWorkflowInvocationOperator(TestCase):
         )
 
 
-class TestDataformCancelWorkflowInvocationOperator(TestCase):
+class TestDataformQueryWorkflowInvocationActionsOperator:
+    @mock.patch(HOOK_STR)
+    @mock.patch(WORKFLOW_INVOCATION_ACTION_STR)
+    def test_execute(self, workflow_invocation_action_str, hook_mock):
+        op = DataformQueryWorkflowInvocationActionsOperator(
+            task_id="query_workflow_invocation_action",
+            project_id=PROJECT_ID,
+            region=REGION,
+            repository_id=REPOSITORY_ID,
+            workflow_invocation_id=WORKFLOW_INVOCATION_ID,
+        )
+
+        workflow_invocation_action_str.return_value.to_dict.return_value = None
+        op.execute(context=mock.MagicMock())
+
+        hook_mock.return_value.query_workflow_invocation_actions.assert_called_once_with(
+            project_id=PROJECT_ID,
+            region=REGION,
+            repository_id=REPOSITORY_ID,
+            workflow_invocation_id=WORKFLOW_INVOCATION_ID,
+            retry=DEFAULT,
+            timeout=None,
+            metadata=(),
+        )
+
+
+class TestDataformCancelWorkflowInvocationOperator:
     @mock.patch(HOOK_STR)
     def test_execute(self, hook_mock):
         op = DataformCancelWorkflowInvocationOperator(
@@ -196,7 +222,7 @@ class TestDataformCancelWorkflowInvocationOperator(TestCase):
         )
 
 
-class TestDataformCreateRepositoryOperator(TestCase):
+class TestDataformCreateRepositoryOperator:
     @mock.patch(HOOK_STR)
     @mock.patch(REPOSITORY_STR)
     def test_execute(self, _, hook_mock):
@@ -217,7 +243,7 @@ class TestDataformCreateRepositoryOperator(TestCase):
         )
 
 
-class TestDataformDeleteRepositoryOperator(TestCase):
+class TestDataformDeleteRepositoryOperator:
     @mock.patch(HOOK_STR)
     def test_execute(self, hook_mock):
         force = True
@@ -241,7 +267,7 @@ class TestDataformDeleteRepositoryOperator(TestCase):
         )
 
 
-class TestDataformCreateWorkspaceOperator(TestCase):
+class TestDataformCreateWorkspaceOperator:
     @mock.patch(HOOK_STR)
     @mock.patch(WORKSPACE_STR)
     def test_execute(self, _, hook_mock):
@@ -265,7 +291,7 @@ class TestDataformCreateWorkspaceOperator(TestCase):
         )
 
 
-class TestDataformDeleteWorkspaceOperator(TestCase):
+class TestDataformDeleteWorkspaceOperator:
     @mock.patch(HOOK_STR)
     def test_execute(self, hook_mock):
         op = DataformDeleteWorkspaceOperator(
@@ -288,7 +314,7 @@ class TestDataformDeleteWorkspaceOperator(TestCase):
         )
 
 
-class TestDataformWriteFileOperator(TestCase):
+class TestDataformWriteFileOperator:
     @mock.patch(HOOK_STR)
     @mock.patch(WRITE_FILE_RESPONSE_STR)
     def test_execute(self, _, hook_mock):
@@ -316,7 +342,7 @@ class TestDataformWriteFileOperator(TestCase):
         )
 
 
-class TestDataformMakeDirectoryOperator(TestCase):
+class TestDataformMakeDirectoryOperator:
     @mock.patch(HOOK_STR)
     @mock.patch(MAKE_DIRECTORY_RESPONSE_STR)
     def test_execute(self, _, hook_mock):
@@ -342,7 +368,7 @@ class TestDataformMakeDirectoryOperator(TestCase):
         )
 
 
-class TestDataformRemoveFileOperator(TestCase):
+class TestDataformRemoveFileOperator:
     @mock.patch(HOOK_STR)
     def test_execute(self, hook_mock):
         op = DataformRemoveFileOperator(
@@ -367,7 +393,7 @@ class TestDataformRemoveFileOperator(TestCase):
         )
 
 
-class TestDataformRemoveDirectoryOperator(TestCase):
+class TestDataformRemoveDirectoryOperator:
     @mock.patch(HOOK_STR)
     def test_execute(self, hook_mock):
         op = DataformRemoveDirectoryOperator(
@@ -392,7 +418,7 @@ class TestDataformRemoveDirectoryOperator(TestCase):
         )
 
 
-class TestDataformInstallNpmPackagesOperator(TestCase):
+class TestDataformInstallNpmPackagesOperator:
     @mock.patch(HOOK_STR)
     @mock.patch(INSTALL_NPM_PACKAGES_RESPONSE_STR)
     def test_execute(self, _, hook_mock):

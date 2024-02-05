@@ -16,16 +16,15 @@
 # under the License.
 from __future__ import annotations
 
-import unittest
 from unittest import mock
 from unittest.mock import Mock
 
 import pytest
 from google.api_core.exceptions import ServerError
-from google.cloud.dataproc_v1.types import JobStatus
+from google.cloud.dataproc_v1.types import Batch, JobStatus
 
-from airflow import AirflowException
-from airflow.providers.google.cloud.sensors.dataproc import DataprocJobSensor
+from airflow.exceptions import AirflowException, AirflowSkipException
+from airflow.providers.google.cloud.sensors.dataproc import DataprocBatchSensor, DataprocJobSensor
 from airflow.version import version as airflow_version
 
 AIRFLOW_VERSION = "v" + airflow_version.replace(".", "-").replace("+", "-")
@@ -39,7 +38,7 @@ GCP_CONN_ID = "test-conn"
 TIMEOUT = 120
 
 
-class TestDataprocJobSensor(unittest.TestCase):
+class TestDataprocJobSensor:
     def create_job(self, state: int):
         job = mock.Mock()
         job.status = mock.Mock()
@@ -67,8 +66,11 @@ class TestDataprocJobSensor(unittest.TestCase):
         )
         assert ret
 
+    @pytest.mark.parametrize(
+        "soft_fail, expected_exception", ((False, AirflowException), (True, AirflowSkipException))
+    )
     @mock.patch(DATAPROC_PATH.format("DataprocHook"))
-    def test_error(self, mock_hook):
+    def test_error(self, mock_hook, soft_fail, expected_exception):
         job = self.create_job(JobStatus.State.ERROR)
         job_id = "job_id"
         mock_hook.return_value.get_job.return_value = job
@@ -80,9 +82,10 @@ class TestDataprocJobSensor(unittest.TestCase):
             dataproc_job_id=job_id,
             gcp_conn_id=GCP_CONN_ID,
             timeout=TIMEOUT,
+            soft_fail=soft_fail,
         )
 
-        with pytest.raises(AirflowException, match="Job failed"):
+        with pytest.raises(expected_exception, match="Job failed"):
             sensor.poke(context={})
 
         mock_hook.return_value.get_job.assert_called_once_with(
@@ -110,8 +113,11 @@ class TestDataprocJobSensor(unittest.TestCase):
         )
         assert not ret
 
+    @pytest.mark.parametrize(
+        "soft_fail, expected_exception", ((False, AirflowException), (True, AirflowSkipException))
+    )
     @mock.patch(DATAPROC_PATH.format("DataprocHook"))
-    def test_cancelled(self, mock_hook):
+    def test_cancelled(self, mock_hook, soft_fail, expected_exception):
         job = self.create_job(JobStatus.State.CANCELLED)
         job_id = "job_id"
         mock_hook.return_value.get_job.return_value = job
@@ -123,8 +129,9 @@ class TestDataprocJobSensor(unittest.TestCase):
             dataproc_job_id=job_id,
             gcp_conn_id=GCP_CONN_ID,
             timeout=TIMEOUT,
+            soft_fail=soft_fail,
         )
-        with pytest.raises(AirflowException, match="Job was cancelled"):
+        with pytest.raises(expected_exception, match="Job was cancelled"):
             sensor.poke(context={})
 
         mock_hook.return_value.get_job.assert_called_once_with(
@@ -164,8 +171,11 @@ class TestDataprocJobSensor(unittest.TestCase):
         result = sensor.poke(context={})
         assert not result
 
+    @pytest.mark.parametrize(
+        "soft_fail, expected_exception", ((False, AirflowException), (True, AirflowSkipException))
+    )
     @mock.patch(DATAPROC_PATH.format("DataprocHook"))
-    def test_wait_timeout_raise_exception(self, mock_hook):
+    def test_wait_timeout_raise_exception(self, mock_hook, soft_fail, expected_exception):
         job_id = "job_id"
         mock_hook.return_value.get_job.side_effect = ServerError("Job are not ready")
 
@@ -177,10 +187,88 @@ class TestDataprocJobSensor(unittest.TestCase):
             gcp_conn_id=GCP_CONN_ID,
             timeout=TIMEOUT,
             wait_timeout=300,
+            soft_fail=soft_fail,
         )
 
         sensor._duration = Mock()
         sensor._duration.return_value = 301
 
-        with pytest.raises(AirflowException, match="Timeout: dataproc job job_id is not ready after 300s"):
+        with pytest.raises(expected_exception, match="Timeout: dataproc job job_id is not ready after 300s"):
             sensor.poke(context={})
+
+
+class TestDataprocBatchSensor:
+    def create_batch(self, state: int):
+        batch = mock.Mock()
+        batch.state = mock.Mock()
+        batch.state = state
+        return batch
+
+    @mock.patch(DATAPROC_PATH.format("DataprocHook"))
+    def test_succeeded(self, mock_hook):
+        batch = self.create_batch(Batch.State.SUCCEEDED)
+        mock_hook.return_value.get_batch.return_value = batch
+
+        sensor = DataprocBatchSensor(
+            task_id=TASK_ID,
+            region=GCP_LOCATION,
+            project_id=GCP_PROJECT,
+            batch_id="batch_id",
+            poke_interval=10,
+            gcp_conn_id=GCP_CONN_ID,
+            timeout=TIMEOUT,
+        )
+        ret = sensor.poke(context={})
+        mock_hook.return_value.get_batch.assert_called_once_with(
+            batch_id="batch_id", region=GCP_LOCATION, project_id=GCP_PROJECT
+        )
+        assert ret
+
+    @pytest.mark.parametrize(
+        "soft_fail, expected_exception", ((False, AirflowException), (True, AirflowSkipException))
+    )
+    @mock.patch(DATAPROC_PATH.format("DataprocHook"))
+    def test_cancelled(self, mock_hook, soft_fail, expected_exception):
+        batch = self.create_batch(Batch.State.CANCELLED)
+        mock_hook.return_value.get_batch.return_value = batch
+
+        sensor = DataprocBatchSensor(
+            task_id=TASK_ID,
+            region=GCP_LOCATION,
+            project_id=GCP_PROJECT,
+            batch_id="batch_id",
+            gcp_conn_id=GCP_CONN_ID,
+            timeout=TIMEOUT,
+            soft_fail=soft_fail,
+        )
+        with pytest.raises(expected_exception, match="Batch was cancelled."):
+            sensor.poke(context={})
+
+        mock_hook.return_value.get_batch.assert_called_once_with(
+            batch_id="batch_id", region=GCP_LOCATION, project_id=GCP_PROJECT
+        )
+
+    @pytest.mark.parametrize(
+        "soft_fail, expected_exception", ((False, AirflowException), (True, AirflowSkipException))
+    )
+    @mock.patch(DATAPROC_PATH.format("DataprocHook"))
+    def test_error(self, mock_hook, soft_fail, expected_exception):
+        batch = self.create_batch(Batch.State.FAILED)
+        mock_hook.return_value.get_batch.return_value = batch
+
+        sensor = DataprocBatchSensor(
+            task_id=TASK_ID,
+            region=GCP_LOCATION,
+            project_id=GCP_PROJECT,
+            batch_id="batch_id",
+            gcp_conn_id=GCP_CONN_ID,
+            timeout=TIMEOUT,
+            soft_fail=soft_fail,
+        )
+
+        with pytest.raises(expected_exception, match="Batch failed"):
+            sensor.poke(context={})
+
+        mock_hook.return_value.get_batch.assert_called_once_with(
+            batch_id="batch_id", region=GCP_LOCATION, project_id=GCP_PROJECT
+        )

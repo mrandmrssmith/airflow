@@ -21,8 +21,9 @@ from contextlib import nullcontext
 import pytest
 
 from airflow.decorators import task
-from airflow.exceptions import ParamValidationError
+from airflow.exceptions import ParamValidationError, RemovedInAirflow3Warning
 from airflow.models.param import Param, ParamsDict
+from airflow.serialization.serialized_objects import BaseSerialization
 from airflow.utils import timezone
 from airflow.utils.types import DagRunType
 from tests.test_utils.db import clear_db_dags, clear_db_runs, clear_db_xcom
@@ -41,14 +42,20 @@ class TestParam:
         with pytest.raises(ParamValidationError, match="No value passed and Param has no default value"):
             p.resolve()
         assert p.resolve(None) is None
+        assert p.dump()["value"] is None
+        assert not p.has_value
 
         p = Param(None)
         assert p.resolve() is None
         assert p.resolve(None) is None
+        assert p.dump()["value"] is None
+        assert not p.has_value
 
         p = Param(None, type="null")
         assert p.resolve() is None
         assert p.resolve(None) is None
+        assert p.dump()["value"] is None
+        assert not p.has_value
         with pytest.raises(ParamValidationError):
             p.resolve("test")
 
@@ -68,6 +75,85 @@ class TestParam:
         with pytest.raises(ParamValidationError, match="No value passed and Param has no default value"):
             p.resolve()
 
+    @pytest.mark.parametrize(
+        "dt",
+        [
+            pytest.param("2022-01-02T03:04:05.678901Z", id="microseconds-zed-timezone"),
+            pytest.param("2022-01-02T03:04:05.678Z", id="milliseconds-zed-timezone"),
+            pytest.param("2022-01-02T03:04:05+00:00", id="seconds-00-00-timezone"),
+            pytest.param("2022-01-02T03:04:05+04:00", id="seconds-custom-timezone"),
+        ],
+    )
+    def test_string_rfc3339_datetime_format(self, dt):
+        """Test valid rfc3339 datetime."""
+        assert Param(dt, type="string", format="date-time").resolve() == dt
+
+    @pytest.mark.parametrize(
+        "dt",
+        [
+            pytest.param("2022-01-02 03:04:05.678901Z", id="space-sep"),
+            pytest.param("2022-01-02T03:04:05.678901", id="tz-naive"),
+            pytest.param("2022-01-02T03Z", id="datetime-with-day-only"),
+            pytest.param("20161001T143028+0530", id="not-formatted-date-time"),
+        ],
+    )
+    def test_string_iso8601_datetime_invalid_rfc3339_format(self, dt):
+        """Test valid iso8601 datetime but not valid rfc3339 datetime conversion."""
+        with pytest.warns(RemovedInAirflow3Warning):
+            assert Param(dt, type="string", format="date-time").resolve() == dt
+
+    @pytest.mark.parametrize(
+        "dt",
+        [
+            pytest.param("2022-01-02", id="date"),
+            pytest.param("03:04:05", id="time"),
+            pytest.param("Thu, 04 Mar 2021 05:06:07 GMT", id="rfc2822-datetime"),
+        ],
+    )
+    def test_string_datetime_invalid_format(self, dt):
+        """Test invalid iso8601 and rfc3339 datetime format."""
+        with pytest.raises(ParamValidationError, match="is not a 'date-time'"):
+            Param(dt, type="string", format="date-time").resolve()
+
+    def test_string_time_format(self):
+        """Test string time format."""
+        assert Param("03:04:05", type="string", format="time").resolve() == "03:04:05"
+
+        error_pattern = "is not a 'time'"
+        with pytest.raises(ParamValidationError, match=error_pattern):
+            Param("03:04:05.06", type="string", format="time").resolve()
+
+        with pytest.raises(ParamValidationError, match=error_pattern):
+            Param("03:04", type="string", format="time").resolve()
+
+        with pytest.raises(ParamValidationError, match=error_pattern):
+            Param("24:00:00", type="string", format="time").resolve()
+
+    @pytest.mark.parametrize(
+        "date_string",
+        [
+            "2021-01-01",
+        ],
+    )
+    def test_string_date_format(self, date_string):
+        """Test string date format."""
+        assert Param(date_string, type="string", format="date").resolve() == date_string
+
+    # Note that 20120503 behaved differently in 3.11.3 Official python image. It was validated as a date
+    # there but it started to fail again in 3.11.4 released on 2023-07-05.
+    @pytest.mark.parametrize(
+        "date_string",
+        [
+            "01/01/2021",
+            "21 May 1975",
+            "20120503",
+        ],
+    )
+    def test_string_date_format_error(self, date_string):
+        """Test string date format failures."""
+        with pytest.raises(ParamValidationError, match="is not a 'date'"):
+            Param(date_string, type="string", format="date").resolve()
+
     def test_int_param(self):
         p = Param(5)
         assert p.resolve() == 5
@@ -82,8 +168,8 @@ class TestParam:
         p = Param(42, type="number")
         assert p.resolve() == 42
 
-        p = Param(1.0, type="number")
-        assert p.resolve() == 1.0
+        p = Param(1.2, type="number")
+        assert p.resolve() == 1.2
 
         with pytest.raises(ParamValidationError):
             p = Param("42", type="number")
@@ -143,6 +229,30 @@ class TestParam:
         assert dump["description"] == "world"
         assert dump["schema"] == {"type": "string", "minLength": 2}
 
+    @pytest.mark.parametrize(
+        "param",
+        [
+            Param("my value", description="hello", schema={"type": "string"}),
+            Param("my value", description="hello"),
+            Param(None, description=None),
+            Param([True], type="array", items={"type": "boolean"}),
+            Param(),
+        ],
+    )
+    def test_param_serialization(self, param: Param):
+        """
+        Test to make sure that native Param objects can be correctly serialized
+        """
+
+        serializer = BaseSerialization()
+        serialized_param = serializer.serialize(param)
+        restored_param: Param = serializer.deserialize(serialized_param)
+
+        assert restored_param.value == param.value
+        assert isinstance(restored_param, Param)
+        assert restored_param.description == param.description
+        assert restored_param.schema == param.schema
+
 
 class TestParamsDict:
     def test_params_dict(self):
@@ -171,7 +281,7 @@ class TestParamsDict:
 
         # Validate the ParamsDict
         plain_dict = pd.validate()
-        assert type(plain_dict) == dict
+        assert isinstance(plain_dict, dict)
         pd2.validate()
         pd3.validate()
 
@@ -213,6 +323,7 @@ class TestDagParamRuntime:
     def teardown_method(self):
         self.clean_db()
 
+    @pytest.mark.db_test
     def test_dag_param_resolves(self, dag_maker):
         """Test dagparam resolves on operator execution"""
         with dag_maker(dag_id="test_xcom_pass_to_op") as dag:
@@ -234,6 +345,7 @@ class TestDagParamRuntime:
         ti = dr.get_task_instances()[0]
         assert ti.xcom_pull() == self.VALUE
 
+    @pytest.mark.db_test
     def test_dag_param_overwrite(self, dag_maker):
         """Test dag param is overwritten from dagrun config"""
         with dag_maker(dag_id="test_xcom_pass_to_op") as dag:
@@ -258,6 +370,7 @@ class TestDagParamRuntime:
         ti = dr.get_task_instances()[0]
         assert ti.xcom_pull() == new_value
 
+    @pytest.mark.db_test
     def test_dag_param_default(self, dag_maker):
         """Test dag param is retrieved from default config"""
         with dag_maker(dag_id="test_xcom_pass_to_op", params={"value": "test"}) as dag:
@@ -276,6 +389,7 @@ class TestDagParamRuntime:
         ti = dr.get_task_instances()[0]
         assert ti.xcom_pull() == "test"
 
+    @pytest.mark.db_test
     @pytest.mark.parametrize(
         "default, should_warn",
         [

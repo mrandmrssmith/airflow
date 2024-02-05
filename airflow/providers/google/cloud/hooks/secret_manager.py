@@ -15,7 +15,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""Hook for Secrets Manager service"""
+"""Hook for Secrets Manager service."""
 from __future__ import annotations
 
 from typing import Sequence
@@ -34,9 +34,6 @@ class SecretsManagerHook(GoogleBaseHook):
     keyword arguments rather than positional.
 
     :param gcp_conn_id: The connection ID to use when fetching connection info.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -50,12 +47,16 @@ class SecretsManagerHook(GoogleBaseHook):
     def __init__(
         self,
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
+        **kwargs,
     ) -> None:
+        if kwargs.get("delegate_to") is not None:
+            raise RuntimeError(
+                "The `delegate_to` parameter has been deprecated before and finally removed in this version"
+                " of Google Provider. You MUST convert it to `impersonate_chain`"
+            )
         super().__init__(
             gcp_conn_id=gcp_conn_id,
-            delegate_to=delegate_to,
             impersonation_chain=impersonation_chain,
         )
         self.client = _SecretManagerClient(credentials=self.get_credentials())
@@ -80,5 +81,7 @@ class SecretsManagerHook(GoogleBaseHook):
         :param project_id: Project id (if you want to override the project_id from credentials)
         """
         return self.get_conn().get_secret(
-            secret_id=secret_id, secret_version=secret_version, project_id=project_id  # type: ignore
+            secret_id=secret_id,
+            secret_version=secret_version,
+            project_id=project_id,  # type: ignore
         )

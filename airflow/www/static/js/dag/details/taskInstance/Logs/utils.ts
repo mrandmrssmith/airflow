@@ -19,35 +19,45 @@
 
 /* global moment */
 
-import { defaultFormatWithTZ } from 'src/datetime_utils';
+import { defaultFormatWithTZ } from "src/datetime_utils";
+
+import sanitizeHtml from "sanitize-html";
 
 export enum LogLevel {
-  DEBUG = 'DEBUG',
-  INFO = 'INFO',
-  WARNING = 'WARNING',
-  ERROR = 'ERROR',
-  CRITICAL = 'CRITICAL',
+  DEBUG = "DEBUG",
+  INFO = "INFO",
+  WARNING = "WARNING",
+  ERROR = "ERROR",
+  CRITICAL = "CRITICAL",
 }
 
 export const logLevelColorMapping = {
-  [LogLevel.DEBUG]: 'gray.300',
-  [LogLevel.INFO]: 'green.200',
-  [LogLevel.WARNING]: 'yellow.200',
-  [LogLevel.ERROR]: 'red.200',
-  [LogLevel.CRITICAL]: 'red.400',
+  [LogLevel.DEBUG]: "gray.300",
+  [LogLevel.INFO]: "green.200",
+  [LogLevel.WARNING]: "yellow.200",
+  [LogLevel.ERROR]: "red.200",
+  [LogLevel.CRITICAL]: "red.400",
 };
 
 export const parseLogs = (
   data: string | undefined,
   timezone: string | null,
   logLevelFilters: Array<LogLevel>,
-  fileSourceFilters: Array<string>,
+  fileSourceFilters: Array<string>
 ) => {
   if (!data) {
     return {};
   }
+  let lines;
 
-  const lines = data.split('\n');
+  let warning;
+
+  try {
+    lines = data.split("\n");
+  } catch (err) {
+    warning = "Unable to show logs. There was an error parsing logs.";
+    return { warning };
+  }
 
   const parsedLines: Array<string> = [];
   const fileSources: Set<string> = new Set();
@@ -56,31 +66,78 @@ export const parseLogs = (
     let parsedLine = line;
 
     // Apply log level filter.
-    if (logLevelFilters.length > 0 && logLevelFilters.every((level) => !line.includes(level))) {
+    if (
+      logLevelFilters.length > 0 &&
+      logLevelFilters.every((level) => !line.includes(level))
+    ) {
       return;
     }
 
     const regExp = /\[(.*?)\] \{(.*?)\}/;
     const matches = line.match(regExp);
-    let logGroup = '';
+    let logGroup = "";
     if (matches) {
       // Replace UTC with the local timezone.
       const dateTime = matches[1];
-      [logGroup] = matches[2].split(':');
+      [logGroup] = matches[2].split(":");
       if (dateTime && timezone) {
         // @ts-ignore
-        const localDateTime = moment.utc(dateTime).tz(timezone).format(defaultFormatWithTZ);
+        const localDateTime = moment
+          .utc(dateTime)
+          // @ts-ignore
+          .tz(timezone)
+          .format(defaultFormatWithTZ);
         parsedLine = line.replace(dateTime, localDateTime);
       }
 
       fileSources.add(logGroup);
     }
 
-    if (fileSourceFilters.length === 0
-        || fileSourceFilters.some((fileSourceFilter) => line.includes(fileSourceFilter))) {
-      parsedLines.push(parsedLine);
+    if (
+      fileSourceFilters.length === 0 ||
+      fileSourceFilters.some((fileSourceFilter) =>
+        line.includes(fileSourceFilter)
+      )
+    ) {
+      // sanitize the lines to remove any tags that may cause HTML injection
+      const sanitizedLine = sanitizeHtml(parsedLine, {
+        allowedTags: ["a"],
+        allowedAttributes: {
+          a: ["href", "target", "style"],
+        },
+        transformTags: {
+          a: (tagName, attribs) => {
+            attribs.style = "color: blue; text-decoration: underline;";
+            return {
+              tagName: "a",
+              attribs,
+            };
+          },
+        },
+      });
+
+      // for lines with links, transform to hyperlinks
+      const lineWithHyperlinks = sanitizedLine.replace(
+        /((https?:\/\/|http:\/\/)[^\s]+)/g,
+        '<a href="$1" target="_blank" style="color: blue; text-decoration: underline;">$1</a>'
+      );
+
+      parsedLines.push(lineWithHyperlinks);
     }
   });
 
-  return { parsedLogs: parsedLines.join('\n'), fileSources: Array.from(fileSources).sort() };
+  return {
+    parsedLogs: parsedLines
+      .map((l) => {
+        if (l.length >= 1000000) {
+          warning =
+            "Large log file. Some lines have been truncated. Download logs in order to see everything.";
+          return `${l.slice(0, 1000000)}...`;
+        }
+        return l;
+      })
+      .join("\n"),
+    fileSources: Array.from(fileSources).sort(),
+    warning,
+  };
 };

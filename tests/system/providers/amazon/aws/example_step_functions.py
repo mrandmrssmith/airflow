@@ -19,9 +19,9 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from airflow import DAG
 from airflow.decorators import task
 from airflow.models.baseoperator import chain
+from airflow.models.dag import DAG
 from airflow.providers.amazon.aws.hooks.step_function import StepFunctionHook
 from airflow.providers.amazon.aws.operators.step_function import (
     StepFunctionGetExecutionOutputOperator,
@@ -70,7 +70,6 @@ with DAG(
     tags=["example"],
     catchup=False,
 ) as dag:
-
     # This context contains the ENV_ID and any env variables requested when the
     # task was built above. Access the info as you would any other TaskFlow task.
     test_context = sys_test_context_task()
@@ -92,6 +91,7 @@ with DAG(
         task_id="wait_for_execution", execution_arn=execution_arn
     )
     # [END howto_sensor_step_function_execution]
+    wait_for_execution.poke_interval = 1
 
     # [START howto_operator_step_function_get_execution_output]
     get_execution_output = StepFunctionGetExecutionOutputOperator(

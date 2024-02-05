@@ -17,20 +17,47 @@
 # under the License.
 from __future__ import annotations
 
+from typing import Any
+
 import jenkins
 
-from airflow import AirflowException
 from airflow.hooks.base import BaseHook
-from airflow.utils.strings import to_boolean
 
 
 class JenkinsHook(BaseHook):
-    """Hook to manage connection to jenkins server"""
+    """Hook to manage connection to jenkins server."""
 
     conn_name_attr = "conn_id"
     default_conn_name = "jenkins_default"
     conn_type = "jenkins"
     hook_name = "Jenkins"
+
+    @classmethod
+    def get_connection_form_widgets(cls) -> dict[str, Any]:
+        """Returns connection widgets to add to connection form."""
+        from flask_babel import lazy_gettext
+        from wtforms import BooleanField
+
+        return {
+            "use_https": BooleanField(
+                label=lazy_gettext("Use Https"),
+                description="Specifies whether to use https scheme. Defaults to http",
+            ),
+        }
+
+    @classmethod
+    def get_ui_field_behaviour(cls) -> dict[str, Any]:
+        """Returns custom field behaviour."""
+        return {
+            "hidden_fields": ["schema", "extra"],
+            "relabeling": {},
+            "placeholders": {
+                "login": "Login for the Jenkins service you would like to connect to",
+                "password": "Password for the Jenkins service you would like to connect too",
+                "host": "Host for your Jenkins server. Should NOT contain scheme (http:// or https://)",
+                "port": "Specify a port number",
+            },
+        }
 
     def __init__(self, conn_id: str = default_conn_name) -> None:
         super().__init__()
@@ -38,29 +65,32 @@ class JenkinsHook(BaseHook):
         self.connection = connection
         connection_prefix = "http"
         # connection.extra contains info about using https (true) or http (false)
-        if to_boolean(connection.extra):
+        if connection.extra_dejson.get("use_https"):
             connection_prefix = "https"
-        url = f"{connection_prefix}://{connection.host}:{connection.port}"
+        url = f"{connection_prefix}://{connection.host}:{connection.port}/{connection.schema}"
         self.log.info("Trying to connect to %s", url)
         self.jenkins_server = jenkins.Jenkins(url, connection.login, connection.password)
 
     def get_jenkins_server(self) -> jenkins.Jenkins:
-        """Get jenkins server"""
+        """Get jenkins server."""
         return self.jenkins_server
 
-    def get_build_building_state(self, job_name: str, build_number: int | None) -> bool:
-        """Get build building state"""
-        try:
-            if not build_number:
-                self.log.info("Build number not specified, getting latest build info from Jenkins")
-                job_info = self.jenkins_server.get_job_info(job_name)
-                build_number_to_check = job_info["lastBuild"]["number"]
-            else:
-                build_number_to_check = build_number
+    def get_latest_build_number(self, job_name) -> int:
+        self.log.info("Build number not specified, getting latest build info from Jenkins")
+        job_info = self.jenkins_server.get_job_info(job_name)
+        return job_info["lastBuild"]["number"]
 
-            self.log.info("Getting build info for %s build number: #%s", job_name, build_number_to_check)
-            build_info = self.jenkins_server.get_build_info(job_name, build_number_to_check)
-            building = build_info["building"]
-            return building
-        except jenkins.JenkinsException as err:
-            raise AirflowException(f"Jenkins call failed with error : {err}")
+    def get_build_result(self, job_name: str, build_number) -> str:
+        build_info = self.jenkins_server.get_build_info(job_name, build_number)
+        return build_info["result"]
+
+    def get_build_building_state(self, job_name: str, build_number: int | None) -> bool:
+        if not build_number:
+            build_number_to_check = self.get_latest_build_number(job_name)
+        else:
+            build_number_to_check = build_number
+
+        self.log.info("Getting build info for %s build number: #%s", job_name, build_number_to_check)
+        build_info = self.jenkins_server.get_build_info(job_name, build_number_to_check)
+        building = build_info["building"]
+        return building

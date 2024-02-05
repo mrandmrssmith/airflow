@@ -20,22 +20,56 @@ from __future__ import annotations
 import json
 import os
 import re
-import unittest
 from collections import namedtuple
 from unittest import mock
+from urllib.parse import quote
 
 import pytest
 import sqlalchemy
 from cryptography.fernet import Fernet
-from parameterized import parameterized
 
-from airflow import AirflowException
+from airflow.exceptions import AirflowException
 from airflow.hooks.base import BaseHook
 from airflow.models import Connection, crypto
 from airflow.providers.sqlite.hooks.sqlite import SqliteHook
+from airflow.providers_manager import HookInfo
 from tests.test_utils.config import conf_vars
 
 ConnectionParts = namedtuple("ConnectionParts", ["conn_type", "login", "password", "host", "port", "schema"])
+
+
+@pytest.fixture()
+def get_connection1():
+    return Connection()
+
+
+@pytest.fixture()
+def get_connection2():
+    return Connection(host="apache.org", extra={})
+
+
+@pytest.fixture()
+def get_connection3():
+    return Connection(conn_type="foo", login="", password="p@$$")
+
+
+@pytest.fixture()
+def get_connection4():
+    return Connection(
+        conn_type="bar",
+        description="Sample Description",
+        host="example.org",
+        login="user",
+        password="p@$$",
+        schema="schema",
+        port=777,
+        extra={"foo": "bar", "answer": 42},
+    )
+
+
+@pytest.fixture()
+def get_connection5():
+    return Connection(uri="aws://")
 
 
 class UriTestCaseConfig:
@@ -61,16 +95,15 @@ class UriTestCaseConfig:
         return f"{func.__name__}_{num}_{param.args[0].description.replace(' ', '_')}"
 
 
-class TestConnection(unittest.TestCase):
-    def setUp(self):
+class TestConnection:
+    def setup_method(self):
         crypto._fernet = None
-        patcher = mock.patch("airflow.models.connection.mask_secret", autospec=True)
-        self.mask_secret = patcher.start()
+        self.patcher = mock.patch("airflow.models.connection.mask_secret", autospec=True)
+        self.mask_secret = self.patcher.start()
 
-        self.addCleanup(patcher.stop)
-
-    def tearDown(self):
+    def teardown_method(self):
         crypto._fernet = None
+        self.patcher.stop()
 
     @conf_vars({("core", "fernet_key"): ""})
     def test_connection_extra_no_encryption(self):
@@ -106,7 +139,7 @@ class TestConnection(unittest.TestCase):
             assert Fernet(key1).decrypt(test_connection._extra.encode()) == b"testextra"
 
         # Test decrypt of old value with new key
-        with conf_vars({("core", "fernet_key"): ",".join([key2.decode(), key1.decode()])}):
+        with conf_vars({("core", "fernet_key"): f"{key2.decode()},{key1.decode()}"}):
             crypto._fernet = None
             assert test_connection.extra == "testextra"
 
@@ -187,7 +220,7 @@ class TestConnection(unittest.TestCase):
         ),
         UriTestCaseConfig(
             test_conn_uri="scheme://user:password@host%2Flocation:1234/schema?"
-            "__extra__=%7B%22my_val%22%3A+%5B%22list%22%2C+%22of%22%2C+%22values%22%5D%2C+%22extra%22%3A+%7B%22nested%22%3A+%7B%22json%22%3A+%22val%22%7D%7D%7D",  # noqa: E501
+            "__extra__=%7B%22my_val%22%3A+%5B%22list%22%2C+%22of%22%2C+%22values%22%5D%2C+%22extra%22%3A+%7B%22nested%22%3A+%7B%22json%22%3A+%22val%22%7D%7D%7D",
             test_conn_attributes=dict(
                 conn_type="scheme",
                 host="host/location",
@@ -350,9 +383,8 @@ class TestConnection(unittest.TestCase):
         ),
     ]
 
-    @parameterized.expand([(x,) for x in test_from_uri_params], UriTestCaseConfig.uri_test_name)
+    @pytest.mark.parametrize("test_config", test_from_uri_params)
     def test_connection_from_uri(self, test_config: UriTestCaseConfig):
-
         connection = Connection(uri=test_config.test_uri)
         for conn_attr, expected_val in test_config.test_conn_attributes.items():
             actual_val = getattr(connection, conn_attr)
@@ -366,13 +398,14 @@ class TestConnection(unittest.TestCase):
         expected_calls = []
         if test_config.test_conn_attributes.get("password"):
             expected_calls.append(mock.call(test_config.test_conn_attributes["password"]))
+            expected_calls.append(mock.call(quote(test_config.test_conn_attributes["password"])))
 
         if test_config.test_conn_attributes.get("extra_dejson"):
             expected_calls.append(mock.call(test_config.test_conn_attributes["extra_dejson"]))
 
         self.mask_secret.assert_has_calls(expected_calls)
 
-    @parameterized.expand([(x,) for x in test_from_uri_params], UriTestCaseConfig.uri_test_name)
+    @pytest.mark.parametrize("test_config", test_from_uri_params)
     def test_connection_get_uri_from_uri(self, test_config: UriTestCaseConfig):
         """
         This test verifies that when we create a conn_1 from URI, and we generate a URI from that conn, that
@@ -393,7 +426,7 @@ class TestConnection(unittest.TestCase):
         assert connection.schema == new_conn.schema
         assert connection.extra_dejson == new_conn.extra_dejson
 
-    @parameterized.expand([(x,) for x in test_from_uri_params], UriTestCaseConfig.uri_test_name)
+    @pytest.mark.parametrize("test_config", test_from_uri_params)
     def test_connection_get_uri_from_conn(self, test_config: UriTestCaseConfig):
         """
         This test verifies that if we create conn_1 from attributes (rather than from URI), and we generate a
@@ -421,7 +454,8 @@ class TestConnection(unittest.TestCase):
             else:
                 assert actual_val == expected_val
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "uri,uri_parts",
         [
             (
                 "http://:password@host:80/database",
@@ -486,7 +520,51 @@ class TestConnection(unittest.TestCase):
                     schema="",
                 ),
             ),
-        ]
+            (
+                "spark://k8s%3a%2F%2F100.68.0.1:443?deploy-mode=cluster",
+                ConnectionParts(
+                    conn_type="spark",
+                    login=None,
+                    password=None,
+                    host="k8s://100.68.0.1",
+                    port=443,
+                    schema="",
+                ),
+            ),
+            (
+                "spark://user:password@k8s%3a%2F%2F100.68.0.1:443?deploy-mode=cluster",
+                ConnectionParts(
+                    conn_type="spark",
+                    login="user",
+                    password="password",
+                    host="k8s://100.68.0.1",
+                    port=443,
+                    schema="",
+                ),
+            ),
+            (
+                "spark://user@k8s%3a%2F%2F100.68.0.1:443?deploy-mode=cluster",
+                ConnectionParts(
+                    conn_type="spark",
+                    login="user",
+                    password=None,
+                    host="k8s://100.68.0.1",
+                    port=443,
+                    schema="",
+                ),
+            ),
+            (
+                "spark://k8s%3a%2F%2Fno.port.com?deploy-mode=cluster",
+                ConnectionParts(
+                    conn_type="spark",
+                    login=None,
+                    password=None,
+                    host="k8s://no.port.com",
+                    port=None,
+                    schema="",
+                ),
+            ),
+        ],
     )
     def test_connection_from_with_auth_info(self, uri, uri_parts):
         connection = Connection(uri=uri)
@@ -498,46 +576,50 @@ class TestConnection(unittest.TestCase):
         assert connection.port == uri_parts.port
         assert connection.schema == uri_parts.schema
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "extra,expected",
         [
             ('{"extra": null}', None),
             ('{"extra": "hi"}', "hi"),
             ('{"extra": {"yo": "hi"}}', '{"yo": "hi"}'),
             ('{"extra": "{\\"yo\\": \\"hi\\"}"}', '{"yo": "hi"}'),
-        ]
+        ],
     )
     def test_from_json_extra(self, extra, expected):
         """json serialization should support extra stored as object _or_ as string"""
         assert Connection.from_json(extra).extra == expected
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "val,expected",
         [
             ('{"conn_type": "abc-abc"}', "abc_abc"),
             ('{"conn_type": "abc_abc"}', "abc_abc"),
             ('{"conn_type": "postgresql"}', "postgres"),
-        ]
+        ],
     )
     def test_from_json_conn_type(self, val, expected):
         """two conn_type normalizations are applied: replace - with _ and postgresql with postgres"""
         assert Connection.from_json(val).conn_type == expected
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "val,expected",
         [
             ('{"port": 1}', 1),
             ('{"port": "1"}', 1),
             ('{"port": null}', None),
-        ]
+        ],
     )
     def test_from_json_port(self, val, expected):
         """two conn_type normalizations are applied: replace - with _ and postgresql with postgres"""
         assert Connection.from_json(val).port == expected
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "val,expected",
         [
             ('pass :/!@#$%^&*(){}"', 'pass :/!@#$%^&*(){}"'),  # these are the same
             (None, None),
             ("", None),  # this is a consequence of the password getter
-        ]
+        ],
     )
     def test_from_json_special_characters(self, val, expected):
         """two conn_type normalizations are applied: replace - with _ and postgresql with postgres"""
@@ -547,7 +629,7 @@ class TestConnection(unittest.TestCase):
     @mock.patch.dict(
         "os.environ",
         {
-            "AIRFLOW_CONN_TEST_URI": "postgresql://username:password@ec2.compute.com:5432/the_database",
+            "AIRFLOW_CONN_TEST_URI": "postgresql://username:password%21@ec2.compute.com:5432/the_database",
         },
     )
     def test_using_env_var(self):
@@ -555,10 +637,10 @@ class TestConnection(unittest.TestCase):
         assert "ec2.compute.com" == conn.host
         assert "the_database" == conn.schema
         assert "username" == conn.login
-        assert "password" == conn.password
+        assert "password!" == conn.password
         assert 5432 == conn.port
 
-        self.mask_secret.assert_called_once_with("password")
+        self.mask_secret.assert_has_calls([mock.call("password!"), mock.call(quote("password!"))])
 
     @mock.patch.dict(
         "os.environ",
@@ -589,6 +671,7 @@ class TestConnection(unittest.TestCase):
         assert "airflow" == conn.password
         assert conn.port is None
 
+    @pytest.mark.db_test
     def test_env_var_priority(self):
         conn = SqliteHook.get_connection(conn_id="airflow_db")
         assert "ec2.compute.com" != conn.host
@@ -660,6 +743,7 @@ class TestConnection(unittest.TestCase):
         ):
             Connection(conn_id="TEST_ID", uri="mysql://", schema="AAA")
 
+    @pytest.mark.db_test
     def test_masking_from_db(self):
         """Test secrets are masked when loaded directly from the DB"""
         from airflow.settings import Session
@@ -670,7 +754,7 @@ class TestConnection(unittest.TestCase):
             conn = Connection(
                 conn_id=f"test-{os.getpid()}",
                 conn_type="http",
-                password="s3cr3t",
+                password="s3cr3t!",
                 extra='{"apikey":"masked too"}',
             )
             session.add(conn)
@@ -681,12 +765,13 @@ class TestConnection(unittest.TestCase):
 
             self.mask_secret.reset_mock()
 
-            from_db = session.query(Connection).get(conn.id)
+            from_db = session.get(Connection, conn.id)
             from_db.extra_dejson
 
             assert self.mask_secret.mock_calls == [
                 # We should have called it _again_ when loading from the DB
-                mock.call("s3cr3t"),
+                mock.call("s3cr3t!"),
+                mock.call(quote("s3cr3t!")),
                 mock.call({"apikey": "masked too"}),
             ]
         finally:
@@ -707,14 +792,14 @@ class TestConnection(unittest.TestCase):
     @mock.patch.dict(
         "os.environ",
         {
-            "AIRFLOW_CONN_TEST_URI_NO_HOOK": "fs://",
+            "AIRFLOW_CONN_TEST_URI_NO_HOOK": "unknown://",
         },
     )
     def test_connection_test_no_hook(self):
-        conn = Connection(conn_id="test_uri_no_hook", conn_type="fs")
+        conn = Connection(conn_id="test_uri_no_hook", conn_type="unknown")
         res = conn.test_connection()
         assert res[0] is False
-        assert res[1] == 'Unknown hook type "fs"'
+        assert res[1] == 'Unknown hook type "unknown"'
 
     @mock.patch.dict(
         "os.environ",
@@ -735,3 +820,87 @@ class TestConnection(unittest.TestCase):
     def test_extra_warnings_non_dict_json(self):
         with pytest.warns(DeprecationWarning, match="not parse as a dictionary"):
             Connection(conn_id="test_extra", conn_type="none", extra='"hi"')
+
+    def test_get_uri_no_conn_type(self):
+        # no conn type --> scheme-relative URI
+        assert Connection().get_uri() == "//"
+        # with host, still works
+        assert Connection(host="abc").get_uri() == "//abc"
+        # parsing back as conn still works
+        assert Connection(uri="//abc").host == "abc"
+
+    @pytest.mark.parametrize(
+        "conn, expected_json",
+        [
+            pytest.param("get_connection1", "{}", id="empty"),
+            pytest.param("get_connection2", '{"host": "apache.org"}', id="empty-extra"),
+            pytest.param(
+                "get_connection3",
+                '{"conn_type": "foo", "login": "", "password": "p@$$"}',
+                id="some-fields",
+            ),
+            pytest.param(
+                "get_connection4",
+                json.dumps(
+                    {
+                        "conn_type": "bar",
+                        "description": "Sample Description",
+                        "host": "example.org",
+                        "login": "user",
+                        "password": "p@$$",
+                        "schema": "schema",
+                        "port": 777,
+                        "extra": {"foo": "bar", "answer": 42},
+                    }
+                ),
+                id="all-fields",
+            ),
+            pytest.param(
+                "get_connection5",
+                # During parsing URI some of the fields evaluated as an empty strings
+                '{"conn_type": "aws", "host": "", "schema": ""}',
+                id="uri",
+            ),
+        ],
+    )
+    def test_as_json_from_connection(self, conn: Connection, expected_json, request):
+        conn = request.getfixturevalue(conn)
+        result = conn.as_json()
+        assert result == expected_json
+        restored_conn = Connection.from_json(result)
+
+        assert restored_conn.conn_type == conn.conn_type
+        assert restored_conn.description == conn.description
+        assert restored_conn.host == conn.host
+        assert restored_conn.password == conn.password
+        assert restored_conn.schema == conn.schema
+        assert restored_conn.port == conn.port
+        assert restored_conn.extra_dejson == conn.extra_dejson
+
+    def test_get_hook_not_found(self):
+        with mock.patch("airflow.providers_manager.ProvidersManager") as m:
+            m.return_value.hooks = {}
+            with pytest.raises(AirflowException, match='Unknown hook type "awesome-test-conn-type"'):
+                Connection(conn_type="awesome-test-conn-type").get_hook()
+
+    def test_get_hook_import_error(self, caplog):
+        with mock.patch("airflow.providers_manager.ProvidersManager") as m:
+            m.return_value.hooks = {
+                "awesome-test-conn-type": HookInfo(
+                    hook_class_name="foo.bar.AwesomeTest",
+                    connection_id_attribute_name="conn-id",
+                    package_name="test.package",
+                    hook_name="Awesome Connection",
+                    connection_type="awesome-test-conn-type",
+                    connection_testable=False,
+                )
+            }
+            caplog.clear()
+            caplog.set_level("ERROR", "airflow.models.connection")
+            with pytest.raises(ImportError):
+                Connection(conn_type="awesome-test-conn-type").get_hook()
+
+            assert caplog.messages
+            assert caplog.messages[0] == (
+                "Could not import foo.bar.AwesomeTest when discovering Awesome Connection test.package"
+            )

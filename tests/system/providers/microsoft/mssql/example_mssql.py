@@ -24,9 +24,15 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
+import pytest
+
 from airflow import DAG
-from airflow.providers.microsoft.mssql.hooks.mssql import MsSqlHook
-from airflow.providers.microsoft.mssql.operators.mssql import MsSqlOperator
+
+try:
+    from airflow.providers.microsoft.mssql.hooks.mssql import MsSqlHook
+    from airflow.providers.microsoft.mssql.operators.mssql import MsSqlOperator
+except ImportError:
+    pytest.skip("MSSQL provider not available", allow_module_level=True)
 
 ENV_ID = os.environ.get("SYSTEM_TESTS_ENV_ID")
 DAG_ID = "example_mssql"
@@ -39,7 +45,6 @@ with DAG(
     tags=["example"],
     catchup=False,
 ) as dag:
-
     # [START howto_operator_mssql]
 
     # Example of creating a task to create a table in MsSql

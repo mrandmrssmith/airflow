@@ -21,18 +21,30 @@ import datetime
 import subprocess
 from unittest import mock
 
+import pytest
+
 from airflow import settings
 from airflow.exceptions import AirflowException
 from airflow.executors.local_executor import LocalExecutor
 from airflow.utils.state import State
 
+pytestmark = pytest.mark.db_test
+
 
 class TestLocalExecutor:
-
     TEST_SUCCESS_COMMANDS = 5
+
+    def test_supports_pickling(self):
+        assert not LocalExecutor.supports_pickling
+
+    def test_supports_sentry(self):
+        assert not LocalExecutor.supports_sentry
 
     def test_is_local_default_value(self):
         assert LocalExecutor.is_local
+
+    def test_serve_logs_default_value(self):
+        assert LocalExecutor.serve_logs
 
     @mock.patch("airflow.executors.local_executor.subprocess.check_call")
     def execution_parallelism_subprocess(self, mock_check_call, parallelism=0):
@@ -63,7 +75,6 @@ class TestLocalExecutor:
         self._test_execute(parallelism, success_command, fail_command)
 
     def _test_execute(self, parallelism, success_command, fail_command):
-
         executor = LocalExecutor(parallelism=parallelism)
         executor.start()
 
@@ -123,8 +134,14 @@ class TestLocalExecutor:
         executor = LocalExecutor()
         executor.heartbeat()
         calls = [
-            mock.call("executor.open_slots", mock.ANY),
-            mock.call("executor.queued_tasks", mock.ANY),
-            mock.call("executor.running_tasks", mock.ANY),
+            mock.call(
+                "executor.open_slots", value=mock.ANY, tags={"status": "open", "name": "LocalExecutor"}
+            ),
+            mock.call(
+                "executor.queued_tasks", value=mock.ANY, tags={"status": "queued", "name": "LocalExecutor"}
+            ),
+            mock.call(
+                "executor.running_tasks", value=mock.ANY, tags={"status": "running", "name": "LocalExecutor"}
+            ),
         ]
         mock_stats_gauge.assert_has_calls(calls)

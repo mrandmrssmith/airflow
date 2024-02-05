@@ -14,24 +14,28 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""Handler that integrates with Stackdriver"""
+"""Handler that integrates with Stackdriver."""
 from __future__ import annotations
 
 import logging
-from typing import Collection
+from functools import cached_property
+from typing import TYPE_CHECKING, Collection
 from urllib.parse import urlencode
 
-from google.auth.credentials import Credentials
 from google.cloud import logging as gcp_logging
 from google.cloud.logging import Resource
 from google.cloud.logging.handlers.transports import BackgroundThreadTransport, Transport
 from google.cloud.logging_v2.services.logging_service_v2 import LoggingServiceV2Client
 from google.cloud.logging_v2.types import ListLogEntriesRequest, ListLogEntriesResponse
 
-from airflow.compat.functools import cached_property
-from airflow.models import TaskInstance
 from airflow.providers.google.cloud.utils.credentials_provider import get_credentials_and_project_id
 from airflow.providers.google.common.consts import CLIENT_INFO
+from airflow.utils.log.trigger_handler import ctx_indiv_trigger
+
+if TYPE_CHECKING:
+    from google.auth.credentials import Credentials
+
+    from airflow.models import TaskInstance
 
 DEFAULT_LOGGER_NAME = "airflow"
 _GLOBAL_RESOURCE = Resource(type="global", labels={})
@@ -78,6 +82,11 @@ class StackdriverTaskHandler(logging.Handler):
     LOG_VIEWER_BASE_URL = "https://console.cloud.google.com/logs/viewer"
     LOG_NAME = "Google Stackdriver"
 
+    trigger_supported = True
+    trigger_should_queue = False
+    trigger_should_wrap = False
+    trigger_send_end_marker = False
+
     def __init__(
         self,
         gcp_key_path: str | None = None,
@@ -106,7 +115,7 @@ class StackdriverTaskHandler(logging.Handler):
 
     @property
     def _client(self) -> gcp_logging.Client:
-        """The Cloud Library API client"""
+        """The Cloud Library API client."""
         credentials, project = self._credentials_and_project
         client = gcp_logging.Client(
             credentials=credentials,
@@ -127,10 +136,28 @@ class StackdriverTaskHandler(logging.Handler):
 
     @cached_property
     def _transport(self) -> Transport:
-        """Object responsible for sending data to Stackdriver"""
+        """Object responsible for sending data to Stackdriver."""
         # The Transport object is badly defined (no init) but in the docs client/name as constructor
         # arguments are a requirement for any class that derives from Transport class, hence ignore:
         return self.transport_type(self._client, self.name)  # type: ignore[call-arg]
+
+    def _get_labels(self, task_instance=None):
+        if task_instance:
+            ti_labels = self._task_instance_to_labels(task_instance)
+        else:
+            ti_labels = self.task_instance_labels
+        labels: dict[str, str] | None
+        if self.labels and ti_labels:
+            labels = {}
+            labels.update(self.labels)
+            labels.update(ti_labels)
+        elif self.labels:
+            labels = self.labels
+        elif ti_labels:
+            labels = ti_labels
+        else:
+            labels = None
+        return labels or {}
 
     def emit(self, record: logging.LogRecord) -> None:
         """Actually log the specified logging record.
@@ -138,22 +165,16 @@ class StackdriverTaskHandler(logging.Handler):
         :param record: The record to be logged.
         """
         message = self.format(record)
-        labels: dict[str, str] | None
-        if self.labels and self.task_instance_labels:
-            labels = {}
-            labels.update(self.labels)
-            labels.update(self.task_instance_labels)
-        elif self.labels:
-            labels = self.labels
-        elif self.task_instance_labels:
-            labels = self.task_instance_labels
-        else:
-            labels = None
+        ti = None
+        # todo: remove ctx_indiv_trigger is not None check when min airflow version >= 2.6
+        if ctx_indiv_trigger is not None and getattr(record, ctx_indiv_trigger.name, None):
+            ti = getattr(record, "task_instance", None)  # trigger context
+        labels = self._get_labels(ti)
         self._transport.send(record, message, resource=self.resource, labels=labels)
 
     def set_context(self, task_instance: TaskInstance) -> None:
         """
-        Configures the logger to add information with information about the current task
+        Configures the logger to add information with information about the current task.
 
         :param task_instance: Currently executed task
         """
@@ -289,10 +310,12 @@ class StackdriverTaskHandler(logging.Handler):
         )
         response = self._logging_service_client.list_log_entries(request=request)
         page: ListLogEntriesResponse = next(response.pages)
-        messages = []
+        messages: list[str] = []
         for entry in page.entries:
-            if "message" in entry.json_payload:
-                messages.append(entry.json_payload["message"])
+            if "message" in (entry.json_payload or {}):
+                messages.append(entry.json_payload["message"])  # type: ignore
+            elif entry.text_payload:
+                messages.append(entry.text_payload)
         return "\n".join(messages), page.next_page_token
 
     @classmethod
@@ -322,8 +345,9 @@ class StackdriverTaskHandler(logging.Handler):
     def get_external_log_url(self, task_instance: TaskInstance, try_number: int) -> str:
         """
         Creates an address for an external log collecting service.
+
         :param task_instance: task instance object
-        :param try_number: task instance try_number to read logs from.
+        :param try_number: task instance try_number to read logs from
         :return: URL to the external log collection service
         """
         _, project_id = self._credentials_and_project

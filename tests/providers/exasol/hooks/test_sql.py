@@ -18,6 +18,7 @@
 #
 from __future__ import annotations
 
+from typing import Any
 from unittest import mock
 from unittest.mock import MagicMock, patch
 
@@ -27,6 +28,9 @@ from airflow.models import Connection
 from airflow.providers.common.sql.hooks.sql import fetch_all_handler
 from airflow.providers.exasol.hooks.exasol import ExasolHook
 from airflow.utils.session import provide_session
+
+pytestmark = pytest.mark.db_test
+
 
 TASK_ID = "sql-operator"
 HOST = "host"
@@ -57,8 +61,11 @@ def exasol_hook():
     return ExasolHook()
 
 
-def get_cursor_descriptions(fields: list[str]) -> list[tuple[str]]:
-    return [(field,) for field in fields]
+def get_columns(fields: list[str]) -> dict[str, dict[str, Any]]:
+    return {
+        field: {"type": "VARCHAR", "nullable": True, "precision": None, "scale": None, "length": None}
+        for field in fields
+    }
 
 
 index = 0
@@ -75,7 +82,12 @@ index = 0
             ["select * from test.test"],
             [["id", "value"]],
             ([[1, 2], [11, 12]],),
-            [[("id",), ("value",)]],
+            [
+                [
+                    ("id", "VARCHAR", None, None, None, None, True),
+                    ("value", "VARCHAR", None, None, None, None, True),
+                ]
+            ],
             [[1, 2], [11, 12]],
             id="The return_last set and no split statements set on single query in string",
         ),
@@ -86,7 +98,12 @@ index = 0
             ["select * from test.test;"],
             [["id", "value"]],
             ([[1, 2], [11, 12]],),
-            [[("id",), ("value",)]],
+            [
+                [
+                    ("id", "VARCHAR", None, None, None, None, True),
+                    ("value", "VARCHAR", None, None, None, None, True),
+                ]
+            ],
             [[1, 2], [11, 12]],
             id="The return_last not set and no split statements set on single query in string",
         ),
@@ -97,7 +114,12 @@ index = 0
             ["select * from test.test;"],
             [["id", "value"]],
             ([[1, 2], [11, 12]],),
-            [[("id",), ("value",)]],
+            [
+                [
+                    ("id", "VARCHAR", None, None, None, None, True),
+                    ("value", "VARCHAR", None, None, None, None, True),
+                ]
+            ],
             [[1, 2], [11, 12]],
             id="The return_last set and split statements set on single query in string",
         ),
@@ -108,7 +130,12 @@ index = 0
             ["select * from test.test;"],
             [["id", "value"]],
             ([[1, 2], [11, 12]],),
-            [[("id",), ("value",)]],
+            [
+                [
+                    ("id", "VARCHAR", None, None, None, None, True),
+                    ("value", "VARCHAR", None, None, None, None, True),
+                ]
+            ],
             [[[1, 2], [11, 12]]],
             id="The return_last not set and split statements set on single query in string",
         ),
@@ -119,7 +146,12 @@ index = 0
             ["select * from test.test;", "select * from test.test2;"],
             [["id", "value"], ["id2", "value2"]],
             ([[1, 2], [11, 12]], [[3, 4], [13, 14]]),
-            [[("id2",), ("value2",)]],
+            [
+                [
+                    ("id2", "VARCHAR", None, None, None, None, True),
+                    ("value2", "VARCHAR", None, None, None, None, True),
+                ]
+            ],
             [[3, 4], [13, 14]],
             id="The return_last set and split statements set on multiple queries in string",
         ),  # Failing
@@ -130,7 +162,16 @@ index = 0
             ["select * from test.test;", "select * from test.test2;"],
             [["id", "value"], ["id2", "value2"]],
             ([[1, 2], [11, 12]], [[3, 4], [13, 14]]),
-            [[("id",), ("value",)], [("id2",), ("value2",)]],
+            [
+                [
+                    ("id", "VARCHAR", None, None, None, None, True),
+                    ("value", "VARCHAR", None, None, None, None, True),
+                ],
+                [
+                    ("id2", "VARCHAR", None, None, None, None, True),
+                    ("value2", "VARCHAR", None, None, None, None, True),
+                ],
+            ],
             [[[1, 2], [11, 12]], [[3, 4], [13, 14]]],
             id="The return_last not set and split statements set on multiple queries in string",
         ),
@@ -141,7 +182,12 @@ index = 0
             ["select * from test.test"],
             [["id", "value"]],
             ([[1, 2], [11, 12]],),
-            [[("id",), ("value",)]],
+            [
+                [
+                    ("id", "VARCHAR", None, None, None, None, True),
+                    ("value", "VARCHAR", None, None, None, None, True),
+                ]
+            ],
             [[[1, 2], [11, 12]]],
             id="The return_last set on single query in list",
         ),
@@ -152,7 +198,12 @@ index = 0
             ["select * from test.test"],
             [["id", "value"]],
             ([[1, 2], [11, 12]],),
-            [[("id",), ("value",)]],
+            [
+                [
+                    ("id", "VARCHAR", None, None, None, None, True),
+                    ("value", "VARCHAR", None, None, None, None, True),
+                ]
+            ],
             [[[1, 2], [11, 12]]],
             id="The return_last not set on single query in list",
         ),
@@ -163,9 +214,14 @@ index = 0
             ["select * from test.test", "select * from test.test2"],
             [["id", "value"], ["id2", "value2"]],
             ([[1, 2], [11, 12]], [[3, 4], [13, 14]]),
-            [[("id2",), ("value2",)]],
+            [
+                [
+                    ("id2", "VARCHAR", None, None, None, None, True),
+                    ("value2", "VARCHAR", None, None, None, None, True),
+                ]
+            ],
             [[3, 4], [13, 14]],
-            id="The return_last set set on multiple queries in list",
+            id="The return_last set on multiple queries in list",
         ),
         pytest.param(
             False,
@@ -174,7 +230,16 @@ index = 0
             ["select * from test.test", "select * from test.test2"],
             [["id", "value"], ["id2", "value2"]],
             ([[1, 2], [11, 12]], [[3, 4], [13, 14]]),
-            [[("id",), ("value",)], [("id2",), ("value2",)]],
+            [
+                [
+                    ("id", "VARCHAR", None, None, None, None, True),
+                    ("value", "VARCHAR", None, None, None, None, True),
+                ],
+                [
+                    ("id2", "VARCHAR", None, None, None, None, True),
+                    ("value2", "VARCHAR", None, None, None, None, True),
+                ],
+            ],
             [[[1, 2], [11, 12]], [[3, 4], [13, 14]]],
             id="The return_last not set on multiple queries not set",
         ),
@@ -196,8 +261,8 @@ def test_query(
         for index in range(len(cursor_descriptions)):
             cur = mock.MagicMock(
                 rowcount=len(cursor_results[index]),
-                description=get_cursor_descriptions(cursor_descriptions[index]),
             )
+            cur.columns.return_value = get_columns(cursor_descriptions[index])
             cur.fetchall.return_value = cursor_results[index]
             cursors.append(cur)
         mock_conn.execute.side_effect = cursors

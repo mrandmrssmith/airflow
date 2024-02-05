@@ -17,21 +17,22 @@
 # under the License.
 from __future__ import annotations
 
-from random import randrange
+import random
 from unittest import mock
 
-import pendulum
 import pytest
 from paramiko.client import SSHClient
 
-from airflow.exceptions import AirflowException
-from airflow.models import DAG, DagModel, DagRun, TaskInstance
+from airflow.exceptions import AirflowException, AirflowSkipException
+from airflow.models import TaskInstance
 from airflow.providers.ssh.hooks.ssh import SSHHook
 from airflow.providers.ssh.operators.ssh import SSHOperator
-from airflow.utils.session import create_session
 from airflow.utils.timezone import datetime
-from airflow.utils.types import DagRunType
+from airflow.utils.types import NOTSET
 from tests.test_utils.config import conf_vars
+
+pytestmark = pytest.mark.db_test
+
 
 TEST_DAG_ID = "unit_tests_ssh_test_op"
 TEST_CONN_ID = "conn_id_for_testing"
@@ -44,37 +45,6 @@ COMMAND = "echo -n airflow"
 COMMAND_WITH_SUDO = "sudo " + COMMAND
 
 
-def create_context(task, persist_to_db=False, map_index=None):
-    if task.has_dag():
-        dag = task.dag
-    else:
-        dag = DAG(dag_id="dag", start_date=pendulum.now())
-        dag.add_task(task)
-    dag_run = DagRun(
-        run_id=DagRun.generate_run_id(DagRunType.MANUAL, DEFAULT_DATE),
-        run_type=DagRunType.MANUAL,
-        dag_id=dag.dag_id,
-    )
-    task_instance = TaskInstance(task=task, run_id=dag_run.run_id)
-    task_instance.dag_run = dag_run
-    if map_index is not None:
-        task_instance.map_index = map_index
-    if persist_to_db:
-        with create_session() as session:
-            session.add(DagModel(dag_id=dag.dag_id))
-            session.add(dag_run)
-            session.add(task_instance)
-            session.commit()
-    return {
-        "dag": dag,
-        "ts": DEFAULT_DATE.isoformat(),
-        "task": task,
-        "ti": task_instance,
-        "task_instance": task_instance,
-        "run_id": "test",
-    }
-
-
 class SSHClientSideEffect:
     def __init__(self, hook):
         self.hook = hook
@@ -82,7 +52,6 @@ class SSHClientSideEffect:
 
 class TestSSHOperator:
     def setup_method(self):
-
         hook = SSHHook(ssh_conn_id="ssh_default")
         hook.no_host_key_check = True
 
@@ -100,19 +69,30 @@ class TestSSHOperator:
             exec_ssh_client_command.return_value = (0, b"airflow", "")
             yield exec_ssh_client_command
 
-    def test_hook_created_correctly(self):
+    @pytest.mark.parametrize(
+        "cmd_timeout, cmd_timeout_expected",
+        [(45, 45), ("Not Set", 10), (None, None)],
+    )
+    def test_hook_created_correctly(self, cmd_timeout, cmd_timeout_expected):
         conn_timeout = 20
-        cmd_timeout = 45
-        task = SSHOperator(
-            task_id="test",
-            command=COMMAND,
-            conn_timeout=conn_timeout,
-            cmd_timeout=cmd_timeout,
-            ssh_conn_id="ssh_default",
-        )
-        ssh_hook = task.get_hook()
-        assert conn_timeout == ssh_hook.conn_timeout
-        assert "ssh_default" == ssh_hook.ssh_conn_id
+        if cmd_timeout == "Not Set":
+            task = SSHOperator(
+                task_id="test",
+                command=COMMAND,
+                conn_timeout=conn_timeout,
+                ssh_conn_id="ssh_default",
+            )
+        else:
+            task = SSHOperator(
+                task_id="test",
+                command=COMMAND,
+                conn_timeout=conn_timeout,
+                cmd_timeout=cmd_timeout,
+                ssh_conn_id="ssh_default",
+            )
+        assert conn_timeout == task.hook.conn_timeout
+        assert cmd_timeout_expected == task.hook.cmd_timeout
+        assert "ssh_default" == task.hook.ssh_conn_id
 
     @pytest.mark.parametrize(
         ("enable_xcom_pickling", "output", "expected"),
@@ -130,7 +110,7 @@ class TestSSHOperator:
             result = task.execute(None)
             assert result == expected
             self.exec_ssh_client_command.assert_called_with(
-                mock.ANY, COMMAND, timeout=10, environment={"TEST": "value"}, get_pty=False
+                mock.ANY, COMMAND, timeout=NOTSET, environment={"TEST": "value"}, get_pty=False
             )
 
     @mock.patch("os.environ", {"AIRFLOW_CONN_" + TEST_CONN_ID.upper(): "ssh://test_id@localhost"})
@@ -223,6 +203,45 @@ class TestSSHOperator:
         self.hook.get_conn.assert_called_once()
         self.hook.get_conn.return_value.__exit__.assert_called_once()
 
+    @pytest.mark.parametrize(
+        "extra_kwargs, actual_exit_code, expected_exc",
+        [
+            ({}, 0, None),
+            ({}, 100, AirflowException),
+            ({}, 101, AirflowException),
+            ({"skip_on_exit_code": None}, 0, None),
+            ({"skip_on_exit_code": None}, 100, AirflowException),
+            ({"skip_on_exit_code": None}, 101, AirflowException),
+            ({"skip_on_exit_code": 100}, 0, None),
+            ({"skip_on_exit_code": 100}, 100, AirflowSkipException),
+            ({"skip_on_exit_code": 100}, 101, AirflowException),
+            ({"skip_on_exit_code": 0}, 0, AirflowSkipException),
+            ({"skip_on_exit_code": [100]}, 0, None),
+            ({"skip_on_exit_code": [100]}, 100, AirflowSkipException),
+            ({"skip_on_exit_code": [100]}, 101, AirflowException),
+            ({"skip_on_exit_code": [100, 102]}, 101, AirflowException),
+            ({"skip_on_exit_code": (100,)}, 0, None),
+            ({"skip_on_exit_code": (100,)}, 100, AirflowSkipException),
+            ({"skip_on_exit_code": (100,)}, 101, AirflowException),
+        ],
+    )
+    def test_skip(self, extra_kwargs, actual_exit_code, expected_exc):
+        command = "not_a_real_command"
+        self.exec_ssh_client_command.return_value = (actual_exit_code, b"", b"")
+
+        operator = SSHOperator(
+            task_id="test",
+            ssh_hook=self.hook,
+            command=command,
+            **extra_kwargs,
+        )
+
+        if expected_exc is None:
+            operator.execute({})
+        else:
+            with pytest.raises(expected_exc):
+                operator.execute({})
+
     def test_command_errored(self):
         # Test that run_ssh_client_command works on invalid commands
         command = "not_a_real_command"
@@ -235,19 +254,16 @@ class TestSSHOperator:
         with pytest.raises(AirflowException, match="SSH operator error: exit status = 1"):
             task.execute(None)
 
-    def test_push_ssh_exit_to_xcom(self, context=None):
+    def test_push_ssh_exit_to_xcom(self, request, dag_maker):
         # Test pulls the value previously pushed to xcom and checks if it's the same
         command = "not_a_real_command"
-        ssh_exit_code = randrange(0, 100)
-        task_push = SSHOperator(task_id="test_push", ssh_hook=self.hook, command=command)
-        task_context = create_context(task_push, persist_to_db=True)
+        ssh_exit_code = random.randrange(1, 100)
         self.exec_ssh_client_command.return_value = (ssh_exit_code, b"", b"ssh output")
-        try:
-            task_push.execute(context=task_context)
-        except AirflowException:
-            pass
-        finally:
-            assert (
-                task_push.xcom_pull(key="ssh_exit", context=task_context, task_ids=["test_push"])[0]
-                == ssh_exit_code
-            )
+
+        with dag_maker(dag_id=f"dag_{request.node.name}"):
+            task = SSHOperator(task_id="push_xcom", ssh_hook=self.hook, command=command)
+        dr = dag_maker.create_dagrun(run_id="push_xcom")
+        ti = TaskInstance(task=task, run_id=dr.run_id)
+        with pytest.raises(AirflowException, match=f"SSH operator error: exit status = {ssh_exit_code}"):
+            ti.run()
+        assert ti.xcom_pull(task_ids=task.task_id, key="ssh_exit") == ssh_exit_code

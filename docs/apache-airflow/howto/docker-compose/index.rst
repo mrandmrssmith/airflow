@@ -20,7 +20,7 @@
 Running Airflow in Docker
 #########################
 
-This quick-start guide will allow you to quickly get Airflow up and running with :doc:`CeleryExecutor </executor/celery>` in Docker.
+This quick-start guide will allow you to quickly get Airflow up and running with :doc:`CeleryExecutor </core-concepts/executor/celery>` in Docker.
 
 .. caution::
     This procedure can be useful for learning and exploration. However, adapting it for use in real-world situations can be complicated. Making changes to this procedure will require specialized expertise in Docker & Docker Compose, and the Airflow community may not be able to help you.
@@ -35,7 +35,7 @@ This procedure assumes familiarity with Docker and Docker Compose. If you haven'
 Follow these steps to install the necessary tools, if you have not already done so.
 
 1. Install `Docker Community Edition (CE) <https://docs.docker.com/engine/installation/>`__ on your workstation. Depending on your OS, you may need to configure Docker to use at least 4.00 GB of memory for the Airflow containers to run properly. Please refer to the Resources section in the `Docker for Windows <https://docs.docker.com/docker-for-windows/#resources>`__ or `Docker for Mac <https://docs.docker.com/docker-for-mac/#resources>`__ documentation for more information.
-2. Install `Docker Compose <https://docs.docker.com/compose/install/>`__ v1.29.1 or newer on your workstation.
+2. Install `Docker Compose <https://docs.docker.com/compose/install/>`__ v2.14.0 or newer on your workstation.
 
 Older versions of ``docker-compose`` do not support all the features required by the Airflow ``docker-compose.yaml`` file, so double check that your version meets the minimum version requirements.
 
@@ -50,6 +50,24 @@ Older versions of ``docker-compose`` do not support all the features required by
 
         docker run --rm "debian:bullseye-slim" bash -c 'numfmt --to iec $(echo $(($(getconf _PHYS_PAGES) * $(getconf PAGE_SIZE))))'
 
+.. warning::
+
+    Some operating systems (Fedora, ArchLinux, RHEL, Rocky) have recently introduced Kernel changes that result in
+    Airflow in Docker Compose consuming 100% memory when run inside the community Docker implementation maintained
+    by the OS teams.
+
+    This is an issue with backwards-incompatible containerd configuration that some of Airflow dependencies
+    have problems with and is tracked in a few issues:
+
+    * `Moby issue <https://github.com/moby/moby/issues/43361>`_
+    * `Containerd issue <https://github.com/containerd/containerd/>`_
+
+    There is no solution yet from the containerd team, but seems that installing
+    `Docker Desktop on Linux <https://docs.docker.com/desktop/install/linux-install/>`_ solves the problem as
+    stated in `This comment <https://github.com/moby/moby/issues/43361#issuecomment-1227617516>`_ and allows to
+    run Breeze with no problems.
+
+
 
 Fetching ``docker-compose.yaml``
 ================================
@@ -62,27 +80,33 @@ Fetching ``docker-compose.yaml``
 
         curl -LfO '{{ doc_root_url }}docker-compose.yaml'
 
+.. important::
+   From July 2023 Compose V1 stopped receiving updates.
+   We strongly advise upgrading to a newer version of Docker Compose, supplied ``docker-compose.yaml`` may not function accurately within Compose V1.
+
 This file contains several service definitions:
 
-- ``airflow-scheduler`` - The :doc:`scheduler </concepts/scheduler>` monitors all tasks and DAGs, then triggers the
+- ``airflow-scheduler`` - The :doc:`scheduler </administration-and-deployment/scheduler>` monitors all tasks and DAGs, then triggers the
   task instances once their dependencies are complete.
 - ``airflow-webserver`` - The webserver is available at ``http://localhost:8080``.
 - ``airflow-worker`` - The worker that executes the tasks given by the scheduler.
+- ``airflow-triggerer`` - The triggerer runs an event loop for deferrable tasks.
 - ``airflow-init`` - The initialization service.
 - ``postgres`` - The database.
 - ``redis`` - `The redis <https://redis.io/>`__ - broker that forwards messages from scheduler to worker.
 
-Optionally, you can enable flower by adding ``--profile flower`` option, e.g. ``docker-compose --profile flower up``, or by explicitly specifying it on the command line e.g. ``docker-compose up flower``.
+Optionally, you can enable flower by adding ``--profile flower`` option, e.g. ``docker compose --profile flower up``, or by explicitly specifying it on the command line e.g. ``docker compose up flower``.
 
 - ``flower`` - `The flower app <https://flower.readthedocs.io/en/latest/>`__ for monitoring the environment. It is available at ``http://localhost:5555``.
 
-All these services allow you to run Airflow with :doc:`CeleryExecutor </executor/celery>`. For more information, see :doc:`/concepts/overview`.
+All these services allow you to run Airflow with :doc:`CeleryExecutor </core-concepts/executor/celery>`. For more information, see :doc:`/core-concepts/overview`.
 
 Some directories in the container are mounted, which means that their contents are synchronized between your computer and the container.
 
 - ``./dags`` - you can put your DAG files here.
 - ``./logs`` - contains logs from task execution and scheduler.
-- ``./plugins`` - you can put your :doc:`custom plugins </plugins>` here.
+- ``./config`` - you can add custom log parser or add ``airflow_local_settings.py`` to configure cluster policy.
+- ``./plugins`` - you can put your :doc:`custom plugins </authoring-and-scheduling/plugins>` here.
 
 This file uses the latest Airflow image (`apache/airflow <https://hub.docker.com/r/apache/airflow>`__).
 If you need to install a new Python library or system library, you can :doc:`build your image <docker-stack:index>`.
@@ -105,7 +129,7 @@ You have to make sure to configure them for the docker-compose:
 
 .. code-block:: bash
 
-    mkdir -p ./dags ./logs ./plugins
+    mkdir -p ./dags ./logs ./plugins ./config
     echo -e "AIRFLOW_UID=$(id -u)" > .env
 
 See :ref:`Docker Compose environment variables <docker-compose-env-variables>`
@@ -147,7 +171,7 @@ up and restart from scratch.
 
 The best way to do this is to:
 
-* Run ``docker-compose down --volumes --remove-orphans`` command in the directory you downloaded the
+* Run ``docker compose down --volumes --remove-orphans`` command in the directory you downloaded the
   ``docker-compose.yaml`` file
 * Remove the entire directory where you downloaded the ``docker-compose.yaml`` file
   ``rm -rf '<DIRECTORY>'``
@@ -160,7 +184,10 @@ Now you can start all services:
 
 .. code-block:: bash
 
-    docker-compose up
+    docker compose up
+
+.. note::
+  docker-compose is old syntax. Please check `Stackoverflow <https://stackoverflow.com/questions/66514436/difference-between-docker-compose-and-docker-compose>`__.
 
 In a second terminal you can check the condition of the containers and make sure that no containers are in an unhealthy condition:
 
@@ -180,18 +207,18 @@ Accessing the environment
 
 After starting Airflow, you can interact with it in 3 ways:
 
-* by running :doc:`CLI commands </usage-cli>`.
+* by running :doc:`CLI commands </howto/usage-cli>`.
 * via a browser using :doc:`the web interface </ui>`.
 * using :doc:`the REST API </stable-rest-api-ref>`.
 
 Running the CLI commands
 ------------------------
 
-You can also run :doc:`CLI commands </usage-cli>`, but you have to do it in one of the defined ``airflow-*`` services. For example, to run ``airflow info``, run the following command:
+You can also run :doc:`CLI commands <../usage-cli>`, but you have to do it in one of the defined ``airflow-*`` services. For example, to run ``airflow info``, run the following command:
 
 .. code-block:: bash
 
-    docker-compose run airflow-worker airflow info
+    docker compose run airflow-worker airflow info
 
 If you have Linux or Mac OS, you can make your work easier and download a optional wrapper scripts that will allow you to run commands with a simpler command.
 
@@ -252,7 +279,7 @@ To stop and delete containers, delete volumes with database data and download im
 
 .. code-block:: bash
 
-    docker-compose down --volumes --rmi all
+    docker compose down --volumes --rmi all
 
 Using custom images
 ===================
@@ -260,12 +287,71 @@ Using custom images
 When you want to run Airflow locally, you might want to use an extended image, containing some additional dependencies - for
 example you might add new python packages, or upgrade airflow providers to a later version. This can be done very easily
 by specifying ``build: .`` in your ``docker-compose.yaml`` and placing a custom Dockerfile alongside your
-``docker-compose.yaml``. Then you can use ``docker-compose build`` command
-to build your image (you need to do it only once). You can also add the ``--build`` flag to your ``docker-compose`` commands
-to rebuild the images on-the-fly when you run other ``docker-compose`` commands.
+``docker-compose.yaml``. Then you can use ``docker compose build`` command
+to build your image (you need to do it only once). You can also add the ``--build`` flag to your ``docker compose`` commands
+to rebuild the images on-the-fly when you run other ``docker compose`` commands.
 
 Examples of how you can extend the image with custom providers, python packages,
 apt packages and more can be found in :doc:`Building the image <docker-stack:build>`.
+
+.. note::
+   Creating custom images means that you need to maintain also a level of automation as you need to re-create the images
+   when either the packages you want to install or Airflow is upgraded. Please do not forget about keeping these scripts.
+   Also keep in mind, that in cases when you run pure Python tasks, you can use the
+   `Python Virtualenv functions <_howto/operator:PythonVirtualenvOperator>`_ which will
+   dynamically source and install python dependencies during runtime. With Airflow 2.8.0 Virtualenvs can also be cached.
+
+Special case - adding dependencies via requirements.txt file
+============================================================
+
+Usual case for custom images, is when you want to add a set of requirements to it - usually stored in
+``requirements.txt`` file. For development, you might be tempted to add it dynamically when you are
+starting the original airflow image, but this has a number of side effects (for example your containers
+will start much slower - each additional dependency will further delay your containers start up time).
+Also it is completely unnecessary, because docker compose has the development workflow built-in.
+You can - following the previous chapter, automatically build and use your custom image when you
+iterate with docker compose locally. Specifically when you want to add your own requirement file,
+you should do those steps:
+
+1) Comment out the ``image: ...`` line and remove comment from the ``build: .`` line in the
+   ``docker-compose.yaml`` file. The relevant part of the docker-compose file of yours should look similar
+   to (use correct image tag):
+
+.. code-block:: docker
+
+    #image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:2.6.1}
+    build: .
+
+2) Create ``Dockerfile`` in the same folder your ``docker-compose.yaml`` file is with content similar to:
+
+.. code-block:: docker
+
+    FROM apache/airflow:2.6.1
+    ADD requirements.txt .
+    RUN pip install apache-airflow==${AIRFLOW_VERSION} -r requirements.txt
+
+It is the best practice to install apache-airflow in the same version as the one that comes from the
+original image. This way you can be sure that ``pip`` will not try to downgrade or upgrade apache
+airflow while installing other requirements, which might happen in case you try to add a dependency
+that conflicts with the version of apache-airflow that you are using.
+
+3) Place ``requirements.txt`` file in the same directory.
+
+Run ``docker compose build`` to build the image, or add ``--build`` flag to ``docker compose up`` or
+``docker compose run`` commands to build the image automatically as needed.
+
+Special case - Adding a custom config file
+==========================================
+
+If you have a custom config file and wish to use it in your Airflow instance, you need to perform the following steps:
+
+1) Remove comment from the ``AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'`` line
+   in the ``docker-compose.yaml`` file.
+
+2) Place your custom ``airflow.cfg`` file in the local config folder.
+
+3) If your config file has a different name than ``airflow.cfg``, adjust the filename in
+   ``AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'``
 
 Networking
 ==========
@@ -302,7 +388,7 @@ runtime user id which is unknown at the time of building the image.
 | ``AIRFLOW_IMAGE_NAME``         | Airflow Image to use.                               | apache/airflow:|version| |
 +--------------------------------+-----------------------------------------------------+--------------------------+
 | ``AIRFLOW_UID``                | UID of the user to run Airflow containers as.       | ``50000``                |
-|                                | Override if you want to use use non-default Airflow |                          |
+|                                | Override if you want to use non-default Airflow     |                          |
 |                                | UID (for example when you map folders from host,    |                          |
 |                                | it should be set to result of ``id -u`` call.       |                          |
 |                                | When it is changed, a user with the UID is          |                          |

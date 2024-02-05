@@ -25,7 +25,7 @@ import datetime
 
 import pendulum
 
-from airflow import DAG
+from airflow.models.dag import DAG
 from airflow.operators.empty import EmptyOperator
 from airflow.sensors.time_delta import TimeDeltaSensorAsync
 
@@ -36,6 +36,6 @@ with DAG(
     catchup=False,
     tags=["example"],
 ) as dag:
-    wait = TimeDeltaSensorAsync(task_id="wait", delta=datetime.timedelta(seconds=10))
+    wait = TimeDeltaSensorAsync(task_id="wait", delta=datetime.timedelta(seconds=30))
     finish = EmptyOperator(task_id="finish")
     wait >> finish

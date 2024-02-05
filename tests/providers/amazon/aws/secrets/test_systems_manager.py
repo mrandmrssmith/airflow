@@ -20,7 +20,7 @@ import json
 from unittest import mock
 
 import pytest
-from moto import mock_ssm
+from moto import mock_aws
 
 from airflow.configuration import initialize_secrets_backends
 from airflow.providers.amazon.aws.secrets.systems_manager import SystemsManagerParameterStoreBackend
@@ -55,7 +55,7 @@ class TestSsmSecrets:
         conn = SystemsManagerParameterStoreBackend().get_connection("fake_conn")
         assert conn.host == "host"
 
-    @mock_ssm
+    @mock_aws
     @pytest.mark.parametrize("ssm_value", [JSON_CONNECTION, URI_CONNECTION])
     def test_get_conn_value(self, ssm_value):
         param = {
@@ -80,28 +80,7 @@ class TestSsmSecrets:
         assert test_conn.schema == "my-schema"
         assert test_conn.extra_dejson == {"param1": "val1", "param2": "val2"}
 
-    @mock_ssm
-    @pytest.mark.parametrize("ssm_value", [JSON_CONNECTION, URI_CONNECTION])
-    def test_deprecated_get_conn_uri(self, ssm_value):
-        param = {
-            "Name": "/airflow/connections/test_postgres",
-            "Type": "String",
-            "Value": ssm_value,
-        }
-
-        ssm_backend = SystemsManagerParameterStoreBackend()
-        ssm_backend.client.put_parameter(**param)
-
-        warning_message = (
-            r"Method `.*\.get_conn_uri` is deprecated and will be removed in a future release\. "
-            r"Please use method `get_conn_value` instead\."
-        )
-        with pytest.warns(DeprecationWarning, match=warning_message):
-            returned_uri = ssm_backend.get_conn_uri(conn_id="test_postgres")
-
-        assert returned_uri == "postgres://my-login:my-pass@my-host:5432/my-schema?param1=val1&param2=val2"
-
-    @mock_ssm
+    @mock_aws
     def test_get_conn_value_non_existent_key(self):
         """
         Test that if the key with connection ID is not present in SSM,
@@ -120,7 +99,7 @@ class TestSsmSecrets:
         assert ssm_backend.get_conn_value(conn_id=conn_id) is None
         assert ssm_backend.get_connection(conn_id=conn_id) is None
 
-    @mock_ssm
+    @mock_aws
     def test_get_variable(self):
         param = {"Name": "/airflow/variables/hello", "Type": "String", "Value": "world"}
 
@@ -130,7 +109,7 @@ class TestSsmSecrets:
         returned_uri = ssm_backend.get_variable("hello")
         assert "world" == returned_uri
 
-    @mock_ssm
+    @mock_aws
     def test_get_config(self):
         param = {
             "Name": "/airflow/config/sql_alchemy_conn",
@@ -144,7 +123,7 @@ class TestSsmSecrets:
         returned_uri = ssm_backend.get_config("sql_alchemy_conn")
         assert "sqlite:///Users/test_user/airflow.db" == returned_uri
 
-    @mock_ssm
+    @mock_aws
     def test_get_variable_secret_string(self):
         param = {"Name": "/airflow/variables/hello", "Type": "SecureString", "Value": "world"}
         ssm_backend = SystemsManagerParameterStoreBackend()
@@ -152,7 +131,7 @@ class TestSsmSecrets:
         returned_uri = ssm_backend.get_variable("hello")
         assert "world" == returned_uri
 
-    @mock_ssm
+    @mock_aws
     def test_get_variable_non_existent_key(self):
         """
         Test that if Variable key is not present in SSM,
@@ -178,11 +157,11 @@ class TestSsmSecrets:
     @mock.patch("airflow.providers.amazon.aws.hooks.base_aws.SessionFactory")
     def test_passing_client_kwargs(self, mock_session_factory):
         backends = initialize_secrets_backends()
-        systems_manager = [
+        systems_manager = next(
             backend
             for backend in backends
             if backend.__class__.__name__ == "SystemsManagerParameterStoreBackend"
-        ][0]
+        )
 
         # Mock SessionFactory, session and client
         mock_session_factory_instance = mock_session_factory.return_value
@@ -194,7 +173,7 @@ class TestSsmSecrets:
 
         systems_manager.client
         assert mock_session_factory.call_count == 1
-        mock_session_factory_call_kwargs = mock_session_factory.call_args[1]
+        mock_session_factory_call_kwargs = mock_session_factory.call_args.kwargs
         assert "conn" in mock_session_factory_call_kwargs
         conn_wrapper = mock_session_factory_call_kwargs["conn"]
 
@@ -253,3 +232,153 @@ class TestSsmSecrets:
 
         assert ssm_backend.get_config("config") is None
         mock_get_secret.assert_not_called()
+
+    @mock.patch(
+        "airflow.providers.amazon.aws.secrets.systems_manager.SystemsManagerParameterStoreBackend.client",
+        new_callable=mock.PropertyMock,
+    )
+    @pytest.mark.parametrize(
+        "connection_id, connections_lookup_pattern, num_client_calls",
+        [
+            ("test", "test", 1),
+            ("test", ".*", 1),
+            ("test", "T.*", 1),
+            ("test", "dummy-pattern", 0),
+            ("test", None, 1),
+        ],
+    )
+    def test_connection_lookup_pattern(
+        self, mock_client, connection_id, connections_lookup_pattern, num_client_calls
+    ):
+        """
+        Test that if Connection ID is looked up in AWS Parameter Store
+        """
+        mock_client().get_parameter.return_value = {
+            "Parameter": {
+                "Value": None,
+            },
+        }
+        kwargs = {"connections_lookup_pattern": connections_lookup_pattern}
+
+        secrets_manager_backend = SystemsManagerParameterStoreBackend(**kwargs)
+        secrets_manager_backend.get_conn_value(connection_id)
+        assert mock_client().get_parameter.call_count == num_client_calls
+
+    @mock.patch(
+        "airflow.providers.amazon.aws.secrets.systems_manager.SystemsManagerParameterStoreBackend.client",
+        new_callable=mock.PropertyMock,
+    )
+    @pytest.mark.parametrize(
+        "variable_key, variables_lookup_pattern, num_client_calls",
+        [
+            ("test", "test", 1),
+            ("test", ".*", 1),
+            ("test", "T.*", 1),
+            ("test", "dummy-pattern", 0),
+            ("test", None, 1),
+        ],
+    )
+    def test_variable_lookup_pattern(
+        self, mock_client, variable_key, variables_lookup_pattern, num_client_calls
+    ):
+        """
+        Test that if Variable key is looked up in AWS Parameter Store
+        """
+        mock_client().get_parameter.return_value = {
+            "Parameter": {
+                "Value": None,
+            },
+        }
+        kwargs = {"variables_lookup_pattern": variables_lookup_pattern}
+
+        secrets_manager_backend = SystemsManagerParameterStoreBackend(**kwargs)
+        secrets_manager_backend.get_variable(variable_key)
+        assert mock_client().get_parameter.call_count == num_client_calls
+
+    @mock.patch(
+        "airflow.providers.amazon.aws.secrets.systems_manager.SystemsManagerParameterStoreBackend.client",
+        new_callable=mock.PropertyMock,
+    )
+    @pytest.mark.parametrize(
+        "config_key, config_lookup_pattern, num_client_calls",
+        [
+            ("test", "test", 1),
+            ("test", ".*", 1),
+            ("test", "T.*", 1),
+            ("test", "dummy-pattern", 0),
+            ("test", None, 1),
+        ],
+    )
+    def test_config_lookup_pattern(self, mock_client, config_key, config_lookup_pattern, num_client_calls):
+        """
+        Test that if Variable key is looked up in AWS Parameter Store
+        """
+        mock_client().get_parameter.return_value = {
+            "Parameter": {
+                "Value": None,
+            },
+        }
+        kwargs = {"config_lookup_pattern": config_lookup_pattern}
+
+        secrets_manager_backend = SystemsManagerParameterStoreBackend(**kwargs)
+        secrets_manager_backend.get_config(config_key)
+        assert mock_client().get_parameter.call_count == num_client_calls
+
+    @mock.patch(
+        "airflow.providers.amazon.aws.secrets.systems_manager.SystemsManagerParameterStoreBackend.client",
+        new_callable=mock.PropertyMock,
+    )
+    def test_connection_prefix_with_no_leading_slash(self, mock_client):
+        """
+        Test that if Connection ID is looked up in AWS Parameter Store with the added leading "/"
+        """
+        mock_client().get_parameter.return_value = {
+            "Parameter": {
+                "Value": None,
+            },
+        }
+        kwargs = {"connections_prefix": "airflow/connections"}
+
+        secrets_manager_backend = SystemsManagerParameterStoreBackend(**kwargs)
+        secrets_manager_backend.get_conn_value("test_mysql")
+        mock_client().get_parameter.assert_called_with(
+            Name="/airflow/connections/test_mysql", WithDecryption=True
+        )
+
+    @mock.patch(
+        "airflow.providers.amazon.aws.secrets.systems_manager.SystemsManagerParameterStoreBackend.client",
+        new_callable=mock.PropertyMock,
+    )
+    def test_variable_prefix_with_no_leading_slash(self, mock_client):
+        """
+        Test that if Variable key is looked up in AWS Parameter Store with the added leading "/"
+        """
+        mock_client().get_parameter.return_value = {
+            "Parameter": {
+                "Value": None,
+            },
+        }
+        kwargs = {"variables_prefix": "airflow/variables"}
+
+        secrets_manager_backend = SystemsManagerParameterStoreBackend(**kwargs)
+        secrets_manager_backend.get_variable("hello")
+        mock_client().get_parameter.assert_called_with(Name="/airflow/variables/hello", WithDecryption=True)
+
+    @mock.patch(
+        "airflow.providers.amazon.aws.secrets.systems_manager.SystemsManagerParameterStoreBackend.client",
+        new_callable=mock.PropertyMock,
+    )
+    def test_config_prefix_with_no_leading_slash(self, mock_client):
+        """
+        Test that if Config key is looked up in AWS Parameter Store with the added leading "/"
+        """
+        mock_client().get_parameter.return_value = {
+            "Parameter": {
+                "Value": None,
+            },
+        }
+        kwargs = {"config_prefix": "airflow/config"}
+
+        secrets_manager_backend = SystemsManagerParameterStoreBackend(**kwargs)
+        secrets_manager_backend.get_config("config")
+        mock_client().get_parameter.assert_called_with(Name="/airflow/config/config", WithDecryption=True)

@@ -20,18 +20,33 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Sequence
 
-from airflow.exceptions import AirflowException
-from airflow.models import BaseOperator
+from deprecated import deprecated
+
+from airflow.exceptions import AirflowException, AirflowProviderDeprecationWarning
 from airflow.providers.google.cloud.hooks.life_sciences import LifeSciencesHook
 from airflow.providers.google.cloud.links.life_sciences import LifeSciencesLink
+from airflow.providers.google.cloud.operators.cloud_base import GoogleCloudBaseOperator
 
 if TYPE_CHECKING:
     from airflow.utils.context import Context
 
 
-class LifeSciencesRunPipelineOperator(BaseOperator):
+@deprecated(
+    reason=(
+        "Consider using Google Cloud Batch Operators instead."
+        "The Life Sciences API (beta) will be discontinued "
+        "on July 8, 2025 in favor of Google Cloud Batch."
+    ),
+    category=AirflowProviderDeprecationWarning,
+)
+class LifeSciencesRunPipelineOperator(GoogleCloudBaseOperator):
     """
-    Runs a Life Sciences Pipeline
+    Runs a Life Sciences Pipeline.
+
+    .. warning::
+        This operator is deprecated. Consider using Google Cloud Batch Operators instead.
+        The Life Sciences API (beta) will be discontinued on July 8, 2025 in favor
+        of Google Cloud Batch.
 
     .. seealso::
         For more information on how to use this operator, take a look at the guide:

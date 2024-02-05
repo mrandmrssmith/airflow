@@ -63,7 +63,8 @@ tasks. The steps to create and register ``@task.foo`` are:
 
 3. Register your new decorator in get_provider_info of your provider
 
-    Finally, add a key-value ``task-decorators`` to the dict returned from the provider entrypoint. This should be
+    Finally, add a key-value ``task-decorators`` to the dict returned from the provider entrypoint as described
+    in :doc:`apache-airflow-providers:howto/create-custom-providers`. This should be
     a list with each item containing ``name`` and ``class-name`` keys. When Airflow starts, the
     ``ProviderManager`` class will automatically import this value and ``task.foo`` will work as a new decorator!
 
@@ -77,7 +78,7 @@ tasks. The steps to create and register ``@task.foo`` are:
                     {
                         "name": "foo",
                         # "Import path" and function name of the `foo_task`
-                        "class-name": ["name.of.python.package.foo_task"],
+                        "class-name": "name.of.python.package.foo_task",
                     }
                 ],
                 # ...

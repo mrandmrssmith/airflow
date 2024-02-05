@@ -25,16 +25,18 @@ from unittest.mock import PropertyMock
 import pytest
 from itsdangerous.url_safe import URLSafeSerializer
 
-from airflow import DAG
 from airflow.api_connexion.exceptions import EXCEPTIONS_LINK_MAP
 from airflow.config_templates.airflow_local_settings import DEFAULT_LOGGING_CONFIG
 from airflow.decorators import task
+from airflow.models.dag import DAG
 from airflow.operators.empty import EmptyOperator
 from airflow.security import permissions
 from airflow.utils import timezone
 from airflow.utils.types import DagRunType
 from tests.test_utils.api_connexion_utils import assert_401, create_user, delete_user
 from tests.test_utils.db import clear_db_runs
+
+pytestmark = pytest.mark.db_test
 
 
 @pytest.fixture(scope="module")
@@ -47,8 +49,7 @@ def configured_app(minimal_app_for_api):
         role_name="Test",
         permissions=[
             (permissions.ACTION_CAN_READ, permissions.RESOURCE_DAG),
-            (permissions.ACTION_CAN_READ, permissions.RESOURCE_DAG_RUN),
-            (permissions.ACTION_CAN_READ, permissions.RESOURCE_TASK_INSTANCE),
+            (permissions.ACTION_CAN_READ, permissions.RESOURCE_TASK_LOG),
         ],
     )
     create_user(app, username="test_no_permissions", role_name="TestNoPermissions")
@@ -166,10 +167,10 @@ class TestGetLog:
         )
         assert (
             response.json["content"]
-            == f"[('localhost', '*** Reading local file: {expected_filename}\\nLog for testing.')]"
+            == f"[('localhost', '*** Found local files:\\n***   * {expected_filename}\\nLog for testing.')]"
         )
         info = serializer.loads(response.json["continuation_token"])
-        assert info == {"end_of_log": True, "log_pos": 41 + len(expected_filename)}
+        assert info == {"end_of_log": True, "log_pos": 16}
         assert 200 == response.status_code
 
     @pytest.mark.parametrize(
@@ -203,7 +204,7 @@ class TestGetLog:
         assert 200 == response.status_code
         assert (
             response.data.decode("utf-8")
-            == f"localhost\n*** Reading local file: {expected_filename}\nLog for testing.\n"
+            == f"localhost\n*** Found local files:\n***   * {expected_filename}\nLog for testing.\n"
         )
 
     @pytest.mark.parametrize(
@@ -244,7 +245,7 @@ class TestGetLog:
         assert 200 == response.status_code
         assert (
             response.data.decode("utf-8")
-            == f"localhost\n*** Reading local file: {expected_filename}\nLog for testing.\n"
+            == f"localhost\n*** Found local files:\n***   * {expected_filename}\nLog for testing.\n"
         )
 
     def test_get_logs_response_with_ti_equal_to_none(self):

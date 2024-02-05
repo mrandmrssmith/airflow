@@ -24,7 +24,6 @@ import pytest
 from pypsrp.host import PSHost
 from pypsrp.messages import MessageType
 from pypsrp.powershell import PSInvocationState
-from pytest import raises
 
 from airflow.exceptions import AirflowException
 from airflow.models import Connection
@@ -124,7 +123,7 @@ class TestPsrpHook:
             return conn
 
         hook.get_connection = get_connection
-        with raises(AirflowException, match="Unexpected extra configuration keys: foo"):
+        with pytest.raises(AirflowException, match="Unexpected extra configuration keys: foo"):
             hook.get_conn()
 
     @pytest.mark.parametrize(
@@ -188,6 +187,15 @@ class TestPsrpHook:
         assert isinstance(kwargs["host"], PSHost)
 
     def test_invoke_cmdlet(self, *mocks):
+        arguments = ("a", "b", "c")
+        parameters = {"bar": "1", "baz": "2"}
+        with PsrpHook(CONNECTION_ID) as hook:
+            ps = hook.invoke_cmdlet("foo", arguments=arguments, parameters=parameters)
+            assert [call("foo", use_local_scope=None)] == ps.add_cmdlet.mock_calls
+            assert [call({"bar": "1", "baz": "2"})] == ps.add_parameters.mock_calls
+            assert [call(arg) for arg in arguments] == ps.add_argument.mock_calls
+
+    def test_invoke_cmdlet_deprecated_kwargs(self, *mocks):
         with PsrpHook(CONNECTION_ID) as hook:
             ps = hook.invoke_cmdlet("foo", bar="1", baz="2")
             assert [call("foo", use_local_scope=None)] == ps.add_cmdlet.mock_calls

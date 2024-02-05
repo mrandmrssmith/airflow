@@ -45,7 +45,7 @@ The actual tasks defined here will run in a different context from
 the context of this script. Different tasks run on different workers
 at different points in time, which means that this script cannot be used
 to cross communicate between tasks. Note that for this
-purpose we have a more advanced feature called :doc:`/concepts/xcoms`.
+purpose we have a more advanced feature called :doc:`/core-concepts/xcoms`.
 
 People sometimes think of the DAG definition file as a place where they
 can do some actual data processing - that is not the case at all!
@@ -66,7 +66,7 @@ Airflow DAG object. Let's start by importing the libraries we will need.
     :end-before: [END import_module]
 
 
-See :doc:`/modules_management` for details on how Python and Airflow manage modules.
+See :doc:`/administration-and-deployment/modules_management` for details on how Python and Airflow manage modules.
 
 Default Arguments
 -----------------
@@ -82,7 +82,7 @@ of default parameters that we can use when creating tasks.
     :end-before: [END default_args]
 
 For more information about the BaseOperator's parameters and what they do,
-refer to the :py:class:`airflow.models.BaseOperator` documentation.
+refer to the :py:class:`airflow.models.baseoperator.BaseOperator` documentation.
 
 Also, note that you could easily define different sets of arguments that
 would serve different purposes. An example of that would be to have
@@ -146,8 +146,11 @@ The precedence rules for a task are as follows:
 2.  Values that exist in the ``default_args`` dictionary
 3.  The operator's default value, if one exists
 
-A task must include or inherit the arguments ``task_id`` and ``owner``,
-otherwise Airflow will raise an exception.
+.. note::
+    A task must include or inherit the arguments ``task_id`` and ``owner``,
+    otherwise Airflow will raise an exception. A fresh install of Airflow will
+    have a default value of 'airflow' set for ``owner``, so you only really need
+    to worry about ensuring ``task_id`` has a value.
 
 Templating with Jinja
 ---------------------
@@ -298,7 +301,7 @@ Let's run a few commands to validate this script further.
 .. code-block:: bash
 
     # initialize the database tables
-    airflow db init
+    airflow db migrate
 
     # print the list of active DAGs
     airflow dags list
@@ -377,7 +380,7 @@ to also wait for all task instances *immediately downstream* of the previous
 task instance to succeed.
 
 The date range in this context is a ``start_date`` and optionally an ``end_date``,
-which are used to populate the run schedule with task instances from this dag.
+which are used to populate the run schedule with task instances from this DAG.
 
 .. code-block:: bash
 
@@ -393,11 +396,11 @@ which are used to populate the run schedule with task instances from this dag.
 What's Next?
 -------------
 That's it! You have written, tested and backfilled your very first Airflow
-pipeline. Merging your code into a repository that has a master scheduler
+pipeline. Merging your code into a repository that has a Scheduler
 running against it should result in being triggered and run every day.
 
 Here are a few things you might want to do next:
 
 .. seealso::
     - Continue to the next step of the tutorial: :doc:`/tutorial/taskflow`
-    - Skip to the the :doc:`/concepts/index` section for detailed explanation of Airflow concepts such as DAGs, Tasks, Operators, and more
+    - Skip to the :doc:`/core-concepts/index` section for detailed explanation of Airflow concepts such as DAGs, Tasks, Operators, and more

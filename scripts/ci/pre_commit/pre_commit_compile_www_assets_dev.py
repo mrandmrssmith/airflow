@@ -21,6 +21,11 @@ import os
 import subprocess
 from pathlib import Path
 
+# NOTE!. This script is executed from node environment created by pre-commit and this environment
+# Cannot have additional Python dependencies installed. We should not import any of the libraries
+# here that are not available in stdlib! You should not import common_precommit_utils.py here because
+# They are importing rich library which is not available in the node environment.
+
 if __name__ not in ("__main__", "__mp_main__"):
     raise SystemExit(
         "This file is intended to be executed as an executable program. You cannot use it as a module."
@@ -28,14 +33,33 @@ if __name__ not in ("__main__", "__mp_main__"):
     )
 
 AIRFLOW_SOURCES_PATH = Path(__file__).parents[3].resolve()
-WWW_HASH_FILE = AIRFLOW_SOURCES_PATH / ".build" / "www_dir_hash.txt"
+WWW_CACHE_DIR = AIRFLOW_SOURCES_PATH / ".build" / "www"
+WWW_HASH_FILE = WWW_CACHE_DIR / "hash.txt"
+WWW_ASSET_OUT_FILE = WWW_CACHE_DIR / "asset_compile.out"
+WWW_ASSET_OUT_DEV_MODE_FILE = WWW_CACHE_DIR / "asset_compile_dev_mode.out"
 
 if __name__ == "__main__":
-    www_directory = Path("airflow") / "www"
+    www_directory = AIRFLOW_SOURCES_PATH / "airflow" / "www"
+    WWW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     if WWW_HASH_FILE.exists():
         # cleanup hash of www so that next compile-assets recompiles them
         WWW_HASH_FILE.unlink()
     env = os.environ.copy()
     env["FORCE_COLOR"] = "true"
-    subprocess.check_call(["yarn", "install", "--frozen-lockfile"], cwd=str(www_directory))
-    subprocess.check_call(["yarn", "dev"], cwd=str(www_directory), env=env)
+    WWW_ASSET_OUT_FILE.unlink(missing_ok=True)
+    with open(WWW_ASSET_OUT_DEV_MODE_FILE, "w") as f:
+        subprocess.run(
+            ["yarn", "install", "--frozen-lockfile"],
+            cwd=os.fspath(www_directory),
+            check=True,
+            stdout=f,
+            stderr=subprocess.STDOUT,
+        )
+        subprocess.run(
+            ["yarn", "dev"],
+            check=True,
+            cwd=os.fspath(www_directory),
+            env=env,
+            stdout=f,
+            stderr=subprocess.STDOUT,
+        )

@@ -17,17 +17,19 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from docutils import nodes
-from docutils.nodes import Node, system_message
 
 # No stub exists for docutils.parsers.rst.directives. See https://github.com/python/typeshed/issues/5755.
 from docutils.parsers.rst import Directive, directives  # type: ignore[attr-defined]
 from docutils.parsers.rst.roles import code_role
-from sphinx.application import Sphinx
 from sphinx.transforms import SphinxTransform
 from sphinx.transforms.post_transforms.code import HighlightLanguageTransform
+
+if TYPE_CHECKING:
+    from docutils.nodes import Node, system_message
+    from sphinx.application import Sphinx
 
 LOGGER = logging.getLogger(__name__)
 
@@ -125,4 +127,4 @@ def setup(app: Sphinx) -> dict:
     app.add_role("subst-code", substitution_code_role)
     app.add_post_transform(SubstitutionCodeBlockTransform)
     app.add_post_transform(AddSpacepadSubstReference)
-    return {"parallel_write_safe": True}
+    return {"parallel_write_safe": True, "parallel_read_safe": True}

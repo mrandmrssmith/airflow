@@ -18,11 +18,10 @@
 """This module contains a Google Cloud Natural Language Hook."""
 from __future__ import annotations
 
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 from google.api_core.gapic_v1.method import DEFAULT, _MethodDefault
-from google.api_core.retry import Retry
-from google.cloud.language_v1 import LanguageServiceClient, enums
+from google.cloud.language_v1 import EncodingType, LanguageServiceClient
 from google.cloud.language_v1.types import (
     AnalyzeEntitiesResponse,
     AnalyzeEntitySentimentResponse,
@@ -37,15 +36,15 @@ from google.cloud.language_v1.types import (
 from airflow.providers.google.common.consts import CLIENT_INFO
 from airflow.providers.google.common.hooks.base_google import GoogleBaseHook
 
+if TYPE_CHECKING:
+    from google.api_core.retry import Retry
+
 
 class CloudNaturalLanguageHook(GoogleBaseHook):
     """
     Hook for Google Cloud Natural Language Service.
 
     :param gcp_conn_id: The connection ID to use when fetching connection info.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
         of the last account in the list, which will be impersonated in the request.
@@ -59,15 +58,19 @@ class CloudNaturalLanguageHook(GoogleBaseHook):
     def __init__(
         self,
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
+        **kwargs,
     ) -> None:
+        if kwargs.get("delegate_to") is not None:
+            raise RuntimeError(
+                "The `delegate_to` parameter has been deprecated before and finally removed in this version"
+                " of Google Provider. You MUST convert it to `impersonate_chain`"
+            )
         super().__init__(
             gcp_conn_id=gcp_conn_id,
-            delegate_to=delegate_to,
             impersonation_chain=impersonation_chain,
         )
-        self._conn = None
+        self._conn: LanguageServiceClient | None = None
 
     def get_conn(self) -> LanguageServiceClient:
         """
@@ -83,14 +86,15 @@ class CloudNaturalLanguageHook(GoogleBaseHook):
     def analyze_entities(
         self,
         document: dict | Document,
-        encoding_type: enums.EncodingType | None = None,
+        encoding_type: EncodingType | None = None,
         retry: Retry | _MethodDefault = DEFAULT,
         timeout: float | None = None,
         metadata: Sequence[tuple[str, str]] = (),
     ) -> AnalyzeEntitiesResponse:
         """
-        Finds named entities in the text along with entity types,
-        salience, mentions for each entity, and other properties.
+        Finds named entities in the text along with various properties.
+
+        Examples properties: entity types, salience, mentions for each entity, and others.
 
         :param document: Input document.
             If a dict is provided, it must be of the same form as the protobuf message Document
@@ -103,6 +107,8 @@ class CloudNaturalLanguageHook(GoogleBaseHook):
         """
         client = self.get_conn()
 
+        if isinstance(document, dict):
+            document = Document(document)
         return client.analyze_entities(
             document=document, encoding_type=encoding_type, retry=retry, timeout=timeout, metadata=metadata
         )
@@ -111,14 +117,13 @@ class CloudNaturalLanguageHook(GoogleBaseHook):
     def analyze_entity_sentiment(
         self,
         document: dict | Document,
-        encoding_type: enums.EncodingType | None = None,
+        encoding_type: EncodingType | None = None,
         retry: Retry | _MethodDefault = DEFAULT,
         timeout: float | None = None,
         metadata: Sequence[tuple[str, str]] = (),
     ) -> AnalyzeEntitySentimentResponse:
         """
-        Finds entities, similar to AnalyzeEntities in the text and analyzes sentiment associated with each
-        entity and its mentions.
+        Similar to AnalyzeEntities, also analyzes sentiment associated with each entity and its mentions.
 
         :param document: Input document.
             If a dict is provided, it must be of the same form as the protobuf message Document
@@ -131,6 +136,8 @@ class CloudNaturalLanguageHook(GoogleBaseHook):
         """
         client = self.get_conn()
 
+        if isinstance(document, dict):
+            document = Document(document)
         return client.analyze_entity_sentiment(
             document=document, encoding_type=encoding_type, retry=retry, timeout=timeout, metadata=metadata
         )
@@ -139,7 +146,7 @@ class CloudNaturalLanguageHook(GoogleBaseHook):
     def analyze_sentiment(
         self,
         document: dict | Document,
-        encoding_type: enums.EncodingType | None = None,
+        encoding_type: EncodingType | None = None,
         retry: Retry | _MethodDefault = DEFAULT,
         timeout: float | None = None,
         metadata: Sequence[tuple[str, str]] = (),
@@ -158,6 +165,8 @@ class CloudNaturalLanguageHook(GoogleBaseHook):
         """
         client = self.get_conn()
 
+        if isinstance(document, dict):
+            document = Document(document)
         return client.analyze_sentiment(
             document=document, encoding_type=encoding_type, retry=retry, timeout=timeout, metadata=metadata
         )
@@ -166,13 +175,15 @@ class CloudNaturalLanguageHook(GoogleBaseHook):
     def analyze_syntax(
         self,
         document: dict | Document,
-        encoding_type: enums.EncodingType | None = None,
+        encoding_type: EncodingType | None = None,
         retry: Retry | _MethodDefault = DEFAULT,
         timeout: float | None = None,
         metadata: Sequence[tuple[str, str]] = (),
     ) -> AnalyzeSyntaxResponse:
         """
-        Analyzes the syntax of the text and provides sentence boundaries and tokenization along with part
+        Analyzes the syntax of the text.
+
+        Provides sentence boundaries and tokenization along with part
         of speech tags, dependency trees, and other properties.
 
         :param document: Input document.
@@ -186,6 +197,8 @@ class CloudNaturalLanguageHook(GoogleBaseHook):
         """
         client = self.get_conn()
 
+        if isinstance(document, dict):
+            document = Document(document)
         return client.analyze_syntax(
             document=document, encoding_type=encoding_type, retry=retry, timeout=timeout, metadata=metadata
         )
@@ -195,14 +208,13 @@ class CloudNaturalLanguageHook(GoogleBaseHook):
         self,
         document: dict | Document,
         features: dict | AnnotateTextRequest.Features,
-        encoding_type: enums.EncodingType = None,
+        encoding_type: EncodingType | None = None,
         retry: Retry | _MethodDefault = DEFAULT,
         timeout: float | None = None,
         metadata: Sequence[tuple[str, str]] = (),
     ) -> AnnotateTextResponse:
         """
-        A convenience method that provides all the features that analyzeSentiment,
-        analyzeEntities, and analyzeSyntax provide in one call.
+        Provide all features that analyzeSentiment, analyzeEntities, and analyzeSyntax provide in one call.
 
         :param document: Input document.
             If a dict is provided, it must be of the same form as the protobuf message Document
@@ -216,6 +228,11 @@ class CloudNaturalLanguageHook(GoogleBaseHook):
         :param metadata: Additional metadata that is provided to the method.
         """
         client = self.get_conn()
+
+        if isinstance(document, dict):
+            document = Document(document)
+        if isinstance(features, dict):
+            features = AnnotateTextRequest.Features(features)
 
         return client.annotate_text(
             document=document,
@@ -247,4 +264,6 @@ class CloudNaturalLanguageHook(GoogleBaseHook):
         """
         client = self.get_conn()
 
+        if isinstance(document, dict):
+            document = Document(document)
         return client.classify_text(document=document, retry=retry, timeout=timeout, metadata=metadata)

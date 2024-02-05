@@ -15,7 +15,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""This module contains AWS SNS hook"""
+"""This module contains AWS SNS hook."""
 from __future__ import annotations
 
 import json
@@ -41,11 +41,13 @@ class SnsHook(AwsBaseHook):
     """
     Interact with Amazon Simple Notification Service.
 
+    Provide thin wrapper around :external+boto3:py:class:`boto3.client("sns") <SNS.Client>`.
+
     Additional arguments (such as ``aws_conn_id``) may be specified and
     are passed down to the underlying AwsBaseHook.
 
     .. seealso::
-        :class:`~airflow.providers.amazon.aws.hooks.base_aws.AwsBaseHook`
+        - :class:`airflow.providers.amazon.aws.hooks.base_aws.AwsBaseHook`
     """
 
     def __init__(self, *args, **kwargs):
@@ -59,11 +61,13 @@ class SnsHook(AwsBaseHook):
         message_attributes: dict | None = None,
     ):
         """
-        Publish a message to a topic or an endpoint.
+        Publish a message to a SNS topic or an endpoint.
+
+        .. seealso::
+            - :external+boto3:py:meth:`SNS.Client.publish`
 
         :param target_arn: either a TopicArn or an EndpointArn
         :param message: the default message you want to send
-        :param message: str
         :param subject: subject of message
         :param message_attributes: additional attributes to publish for message filtering. This should be
             a flat dict; the DataType to be sent depends on the type of the value:

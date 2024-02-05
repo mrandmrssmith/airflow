@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from unittest import mock
 
-from airflow.providers.common.sql.hooks.sql import fetch_all_handler
+from airflow.providers.exasol.hooks.exasol import exasol_fetch_all_handler
 from airflow.providers.exasol.operators.exasol import ExasolOperator
 
 
@@ -32,9 +32,8 @@ class TestExasol:
             sql="SELECT 1",
             autocommit=True,
             parameters=None,
-            handler=fetch_all_handler,
+            handler=exasol_fetch_all_handler,
             return_last=True,
-            split_statements=False,
         )
 
     @mock.patch("airflow.providers.common.sql.operators.sql.SQLExecuteQueryOperator.get_db_hook")
@@ -45,9 +44,8 @@ class TestExasol:
             sql="SELECT {value!s}",
             autocommit=False,
             parameters={"value": 1},
-            handler=fetch_all_handler,
+            handler=exasol_fetch_all_handler,
             return_last=True,
-            split_statements=False,
         )
 
     @mock.patch("airflow.providers.common.sql.operators.sql.BaseSQLOperator.__init__")
@@ -55,6 +53,7 @@ class TestExasol:
         ExasolOperator(task_id="TEST", sql="SELECT 1", schema="dummy")
         mock_base_op.assert_called_once_with(
             conn_id="exasol_default",
+            database=None,
             hook_params={"schema": "dummy"},
             default_args={},
             task_id="TEST",

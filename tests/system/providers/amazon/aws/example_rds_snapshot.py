@@ -18,8 +18,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from airflow import DAG
 from airflow.models.baseoperator import chain
+from airflow.models.dag import DAG
 from airflow.providers.amazon.aws.operators.rds import (
     RdsCopyDbSnapshotOperator,
     RdsCreateDbInstanceOperator,
@@ -62,6 +62,7 @@ with DAG(
             "MasterUserPassword": "rds_password",
             "AllocatedStorage": 20,
             "DBName": rds_db_name,
+            "PubliclyAccessible": False,
         },
     )
 

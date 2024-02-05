@@ -22,12 +22,14 @@ Apache Druid Operators
 Prerequisite
 ------------
 
-To use ``DruidOperator``, you must configure a Druid Connection first.
+To use :class:`~airflow.providers.apache.druid.operators.druid.DruidOperator`,
+you must configure a Druid Connection first.
 
 DruidOperator
 -------------------
 
 Submit a task directly to Druid, you need to provide the filepath to the Druid index specification ``json_index_file``, and the connection id of the Druid overlord ``druid_ingest_conn_id`` which accepts index jobs in Airflow Connections.
+In addition, you can provide the ingestion type ``ingestion_type`` to determine whether the job is Batch Ingestion or SQL-based ingestion.
 
 There is also a example content of the Druid Ingestion specification below.
 

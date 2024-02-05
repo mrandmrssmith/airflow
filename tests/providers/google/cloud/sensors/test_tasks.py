@@ -17,7 +17,6 @@
 # under the License.
 from __future__ import annotations
 
-import unittest
 from typing import Any
 from unittest import mock
 
@@ -35,10 +34,9 @@ TASK_NAME = "test-task"
 FULL_TASK_PATH = "projects/test-project/locations/asia-east2/queues/test-queue/tasks/test-task"
 
 
-class TestCloudTasksEmptySensor(unittest.TestCase):
+class TestCloudTasksEmptySensor:
     @mock.patch("airflow.providers.google.cloud.sensors.tasks.CloudTasksHook")
     def test_queue_empty(self, mock_hook):
-
         operator = TaskQueueEmptySensor(
             task_id=TASK_NAME, location=LOCATION, project_id=PROJECT_ID, queue_name=QUEUE_ID, poke_interval=0
         )

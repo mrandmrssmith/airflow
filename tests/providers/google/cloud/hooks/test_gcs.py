@@ -18,17 +18,17 @@
 from __future__ import annotations
 
 import copy
-import io
 import logging
 import os
 import re
-import tempfile
-import unittest
+from collections import namedtuple
 from datetime import datetime, timedelta
+from io import BytesIO
 from unittest import mock
 
 import dateutil
 import pytest
+from google.api_core.exceptions import GoogleAPICallError
 
 # dynamic storage type in google.cloud needs to be type-ignored
 from google.cloud import exceptions, storage  # type: ignore[attr-defined]
@@ -47,9 +47,29 @@ GCS_STRING = "airflow.providers.google.cloud.hooks.gcs.{}"
 
 EMPTY_CONTENT = b""
 PROJECT_ID_TEST = "project-id"
+GCP_CONN_ID = "google_cloud_default"
+GCS_FILE_URI = "gs://bucket/file"
 
 
-class TestGCSHookHelperFunctions(unittest.TestCase):
+@pytest.fixture(scope="module")
+def testdata_bytes():
+    # generate a 384KiB test file (larger than the minimum 256KiB multipart chunk size)
+    return b"x" * 393216
+
+
+@pytest.fixture(scope="module")
+def testdata_string(testdata_bytes):
+    return testdata_bytes.decode()
+
+
+@pytest.fixture(scope="module")
+def testdata_file(request, tmp_path_factory, testdata_bytes):
+    fn = tmp_path_factory.mktemp(request.node.name) / "testfile_data"
+    fn.write_bytes(testdata_bytes)
+    yield str(fn)
+
+
+class TestGCSHookHelperFunctions:
     def test_parse_gcs_url(self):
         """
         Test GCS url parsing
@@ -69,9 +89,44 @@ class TestGCSHookHelperFunctions(unittest.TestCase):
         # bucket only
         assert gcs._parse_gcs_url("gs://bucket/") == ("bucket", "")
 
+    @pytest.mark.parametrize(
+        "json_value, parsed_value",
+        [
+            ("[1, 2, 3]", [1, 2, 3]),
+            ('"string value"', "string value"),
+            ('{"key1": [1], "key2": {"subkey": 2}}', {"key1": [1], "key2": {"subkey": 2}}),
+        ],
+    )
+    @mock.patch(GCS_STRING.format("GCSHook"))
+    @mock.patch(GCS_STRING.format("NamedTemporaryFile"))
+    def test_parse_json_from_gcs(self, temp_file, gcs_hook, json_value, parsed_value):
+        temp_file.return_value.__enter__.return_value.read.return_value = json_value
+        assert gcs.parse_json_from_gcs(gcp_conn_id=GCP_CONN_ID, file_uri=GCS_FILE_URI) == parsed_value
 
-class TestFallbackObjectUrlToObjectNameAndBucketName(unittest.TestCase):
-    def setUp(self) -> None:
+    @mock.patch(GCS_STRING.format("GCSHook"))
+    def test_parse_json_from_gcs_fail_download(self, gsc_hook):
+        gsc_hook.return_value.download.return_value.side_effect = GoogleAPICallError
+        with pytest.raises(AirflowException):
+            gcs.parse_json_from_gcs(gcp_conn_id=GCP_CONN_ID, file_uri=GCS_FILE_URI)
+
+    @mock.patch(GCS_STRING.format("GCSHook"))
+    @mock.patch(GCS_STRING.format("NamedTemporaryFile"))
+    def test_parse_json_from_gcs_fail_read_file(self, temp_file, gcs_hook):
+        for exception_class in (ValueError, OSError, RuntimeError):
+            temp_file.return_value.__enter__.return_value.read.side_effect = exception_class
+            with pytest.raises(AirflowException):
+                gcs.parse_json_from_gcs(gcp_conn_id=GCP_CONN_ID, file_uri=GCS_FILE_URI)
+
+    @mock.patch(GCS_STRING.format("GCSHook"))
+    @mock.patch(GCS_STRING.format("NamedTemporaryFile"))
+    def test_parse_json_from_gcs_fail_json_loads(self, temp_file, gcs_hook):
+        temp_file.return_value.__enter__.return_value.read.return_value = "Invalid json"
+        with pytest.raises(AirflowException):
+            gcs.parse_json_from_gcs(gcp_conn_id=GCP_CONN_ID, file_uri=GCS_FILE_URI)
+
+
+class TestFallbackObjectUrlToObjectNameAndBucketName:
+    def setup_method(self):
         self.assertion_on_body = mock.MagicMock()
 
         @_fallback_object_url_to_object_name_and_bucket_name()
@@ -112,12 +167,12 @@ class TestFallbackObjectUrlToObjectNameAndBucketName(unittest.TestCase):
         self.assertion_on_body.assert_not_called()
 
 
-class TestGCSHook(unittest.TestCase):
-    @pytest.fixture(autouse=True)
-    def inject_fixtures(self, caplog):
-        self._caplog = caplog
+class TestGCSHook:
+    def test_delegate_to_runtime_error(self):
+        with pytest.raises(RuntimeError):
+            gcs.GCSHook(api_version="v1", gcp_conn_id="GCP_CONN_ID", delegate_to="delegate_to")
 
-    def setUp(self):
+    def setup_method(self):
         with mock.patch(
             GCS_STRING.format("GoogleBaseHook.__init__"),
             new=mock_base_gcp_hook_default_project_id,
@@ -245,7 +300,9 @@ class TestGCSHook(unittest.TestCase):
 
         # When
         response = self.gcs_hook.is_older_than(
-            bucket_name=test_bucket, object_name=test_object, seconds=86400  # 24hr
+            bucket_name=test_bucket,
+            object_name=test_object,
+            seconds=86400,  # 24hr
         )
 
         # Then
@@ -257,13 +314,16 @@ class TestGCSHook(unittest.TestCase):
         test_object = "test_object"
 
         # Given
-        # fmt: off
-        mock_service.return_value.bucket.return_value.get_blob \
-            .return_value.updated = timezone.utcnow() + timedelta(days=2)
-        # fmt: on
+
+        mock_service.return_value.bucket.return_value.get_blob.return_value.updated = (
+            timezone.utcnow() + timedelta(days=2)
+        )
+
         # When
         response = self.gcs_hook.is_older_than(
-            bucket_name=test_bucket, object_name=test_object, seconds=86400  # 24hr
+            bucket_name=test_bucket,
+            object_name=test_object,
+            seconds=86400,  # 24hr
         )
         # Then
         assert not response
@@ -316,10 +376,7 @@ class TestGCSHook(unittest.TestCase):
 
         assert str(ctx.value) == (
             "Either source/destination bucket or source/destination object must be different, "
-            "not both the same: bucket={}, object={}"
-        ).format(
-            source_bucket,
-            source_object,
+            f"not both the same: bucket={source_bucket}, object={source_object}"
         )
 
     def test_copy_empty_source_bucket(self):
@@ -449,20 +506,21 @@ class TestGCSHook(unittest.TestCase):
 
         self.gcs_hook.delete_bucket(bucket_name=test_bucket)
 
-        mock_service.return_value.bucket.assert_called_once_with(test_bucket)
+        mock_service.return_value.bucket.assert_called_once_with(test_bucket, user_project=None)
         mock_service.return_value.bucket.return_value.delete.assert_called_once()
 
+    @pytest.mark.db_test
     @mock.patch(GCS_STRING.format("GCSHook.get_conn"))
-    def test_delete_nonexisting_bucket(self, mock_service):
+    def test_delete_nonexisting_bucket(self, mock_service, caplog):
         mock_service.return_value.bucket.return_value.delete.side_effect = exceptions.NotFound(
             message="Not Found"
         )
         test_bucket = "test bucket"
-        with self._caplog.at_level(logging.INFO):
+        with caplog.at_level(logging.INFO):
             self.gcs_hook.delete_bucket(bucket_name=test_bucket)
-        mock_service.return_value.bucket.assert_called_once_with(test_bucket)
+        mock_service.return_value.bucket.assert_called_once_with(test_bucket, user_project=None)
         mock_service.return_value.bucket.return_value.delete.assert_called_once()
-        assert "Bucket test bucket not exist" in self._caplog.text
+        assert "Bucket test bucket not exist" in caplog.text
 
     @mock.patch(GCS_STRING.format("GCSHook.get_conn"))
     def test_object_get_size(self, mock_service):
@@ -647,7 +705,7 @@ class TestGCSHook(unittest.TestCase):
     def test_download_as_bytes(self, mock_service):
         test_bucket = "test_bucket"
         test_object = "test_object"
-        test_object_bytes = io.BytesIO(b"input")
+        test_object_bytes = BytesIO(b"input")
 
         download_method = mock_service.return_value.bucket.return_value.blob.return_value.download_as_bytes
         download_method.return_value = test_object_bytes
@@ -661,7 +719,7 @@ class TestGCSHook(unittest.TestCase):
     def test_download_to_file(self, mock_service):
         test_bucket = "test_bucket"
         test_object = "test_object"
-        test_object_bytes = io.BytesIO(b"input")
+        test_object_bytes = BytesIO(b"input")
         test_file = "test_file"
 
         download_filename_method = (
@@ -685,7 +743,7 @@ class TestGCSHook(unittest.TestCase):
     def test_provide_file(self, mock_service, mock_temp_file):
         test_bucket = "test_bucket"
         test_object = "test_object"
-        test_object_bytes = io.BytesIO(b"input")
+        test_object_bytes = BytesIO(b"input")
         test_file = "test_file"
 
         download_filename_method = (
@@ -701,7 +759,6 @@ class TestGCSHook(unittest.TestCase):
         mock_temp_file.return_value.__enter__.return_value.name = test_file
 
         with self.gcs_hook.provide_file(bucket_name=test_bucket, object_name=test_object) as response:
-
             assert test_file == response.name
         download_filename_method.assert_called_once_with(test_file, timeout=60)
         mock_temp_file.assert_has_calls(
@@ -730,7 +787,7 @@ class TestGCSHook(unittest.TestCase):
             fhandle.write()
 
         mock_upload.assert_called_once_with(
-            bucket_name=test_bucket, object_name=test_object, filename=test_file
+            bucket_name=test_bucket, object_name=test_object, filename=test_file, user_project=None
         )
         mock_temp_file.assert_has_calls(
             [
@@ -740,6 +797,119 @@ class TestGCSHook(unittest.TestCase):
                 mock.call().__enter__().flush(),
                 mock.call().__exit__(None, None, None),
             ]
+        )
+
+    @pytest.mark.parametrize(
+        "prefix, blob_names, returned_prefixes, call_args, result",
+        (
+            (
+                "prefix",
+                ["prefix"],
+                None,
+                [mock.call(delimiter=",", prefix="prefix", versions=None, max_results=None, page_token=None)],
+                ["prefix"],
+            ),
+            (
+                "prefix",
+                ["prefix"],
+                {"prefix,"},
+                [mock.call(delimiter=",", prefix="prefix", versions=None, max_results=None, page_token=None)],
+                ["prefix,"],
+            ),
+            (
+                ["prefix", "prefix_2"],
+                ["prefix", "prefix2"],
+                None,
+                [
+                    mock.call(
+                        delimiter=",", prefix="prefix", versions=None, max_results=None, page_token=None
+                    ),
+                    mock.call(
+                        delimiter=",", prefix="prefix_2", versions=None, max_results=None, page_token=None
+                    ),
+                ],
+                ["prefix", "prefix2"],
+            ),
+        ),
+    )
+    @mock.patch(GCS_STRING.format("GCSHook.get_conn"))
+    def test_list__delimiter(self, mock_service, prefix, blob_names, returned_prefixes, call_args, result):
+        Blob = namedtuple("Blob", ["name"])
+
+        class BlobsIterator:
+            def __init__(self):
+                self._item_iter = (Blob(name=name) for name in blob_names)
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                try:
+                    return next(self._item_iter)
+                except StopIteration:
+                    self.prefixes = returned_prefixes
+                    self.next_page_token = None
+                    raise
+
+        mock_service.return_value.bucket.return_value.list_blobs.return_value = BlobsIterator()
+        with pytest.deprecated_call():
+            blobs = self.gcs_hook.list(
+                bucket_name="test_bucket",
+                prefix=prefix,
+                delimiter=",",
+            )
+        assert mock_service.return_value.bucket.return_value.list_blobs.call_args_list == call_args
+        assert blobs == result
+
+    @mock.patch(GCS_STRING.format("GCSHook.get_conn"))
+    @mock.patch("airflow.providers.google.cloud.hooks.gcs.functools")
+    @mock.patch("google.cloud.storage.bucket._item_to_blob")
+    @mock.patch("google.cloud.storage.bucket._blobs_page_start")
+    @mock.patch("google.api_core.page_iterator.HTTPIterator")
+    def test_list__match_glob(
+        self, http_iterator, _blobs_page_start, _item_to_blob, mocked_functools, mock_service
+    ):
+        http_iterator.return_value.next_page_token = None
+        self.gcs_hook.list(
+            bucket_name="test_bucket",
+            prefix="prefix",
+            match_glob="**/*.json",
+        )
+        http_iterator.assert_has_calls(
+            [
+                mock.call(
+                    api_request=mocked_functools.partial.return_value,
+                    client=mock_service.return_value,
+                    extra_params={"prefix": "prefix", "matchGlob": "**/*.json"},
+                    item_to_value=_item_to_blob,
+                    max_results=None,
+                    page_start=_blobs_page_start,
+                    page_token=None,
+                    path=mock_service.return_value.bucket.return_value.path.__add__.return_value,
+                )
+            ]
+        )
+
+    @mock.patch(GCS_STRING.format("GCSHook.get_conn"))
+    def test_list__error_match_glob_and_invalid_delimiter(self, _):
+        with pytest.raises(AirflowException):
+            self.gcs_hook.list(
+                bucket_name="test_bucket",
+                prefix="prefix",
+                delimiter=",",
+                match_glob="**/*.json",
+            )
+
+    @pytest.mark.parametrize("delimiter", [None, "", "/"])
+    @mock.patch("google.api_core.page_iterator.HTTPIterator")
+    @mock.patch(GCS_STRING.format("GCSHook.get_conn"))
+    def test_list__error_match_glob_and_valid_delimiter(self, mock_service, http_iterator, delimiter):
+        http_iterator.return_value.next_page_token = None
+        self.gcs_hook.list(
+            bucket_name="test_bucket",
+            prefix="prefix",
+            delimiter="/",
+            match_glob="**/*.json",
         )
 
     @mock.patch(GCS_STRING.format("GCSHook.get_conn"))
@@ -776,24 +946,13 @@ class TestGCSHook(unittest.TestCase):
         assert len(response) == 2 and all("in-interval" in b for b in response)
 
 
-class TestGCSHookUpload(unittest.TestCase):
-    def setUp(self):
+class TestGCSHookUpload:
+    def setup_method(self):
         with mock.patch(BASE_STRING.format("GoogleBaseHook.__init__")):
             self.gcs_hook = gcs.GCSHook(gcp_conn_id="test")
 
-        # generate a 384KiB test file (larger than the minimum 256KiB multipart chunk size)
-
-        self.testfile = tempfile.NamedTemporaryFile(delete=False)
-        self.testfile.write(b"x" * 393216)
-        self.testfile.flush()
-        self.testdata_bytes = b"x" * 393216
-        self.testdata_str = "x" * 393216
-
-    def tearDown(self):
-        os.unlink(self.testfile.name)
-
     @mock.patch(GCS_STRING.format("GCSHook.get_conn"))
-    def test_upload_file(self, mock_service):
+    def test_upload_file(self, mock_service, testdata_file):
         test_bucket = "test_bucket"
         test_object = "test_object"
         metadata = {"key1": "val1", "key2": "key2"}
@@ -803,48 +962,61 @@ class TestGCSHookUpload(unittest.TestCase):
 
         upload_method = blob_object.return_value.upload_from_filename
 
-        self.gcs_hook.upload(test_bucket, test_object, filename=self.testfile.name, metadata=metadata)
+        self.gcs_hook.upload(test_bucket, test_object, filename=testdata_file, metadata=metadata)
 
         upload_method.assert_called_once_with(
-            filename=self.testfile.name, content_type="application/octet-stream", timeout=60
+            filename=testdata_file, content_type="application/octet-stream", timeout=60
         )
 
-        self.assertEqual(metadata, blob_object.return_value.metadata)
+        assert metadata == blob_object.return_value.metadata
 
     @mock.patch(GCS_STRING.format("GCSHook.get_conn"))
-    def test_upload_file_gzip(self, mock_service):
+    def test_upload_cache_control(self, mock_service, testdata_file):
+        test_bucket = "test_bucket"
+        test_object = "test_object"
+        cache_control = "public, max-age=3600"
+
+        bucket_mock = mock_service.return_value.bucket
+        blob_object = bucket_mock.return_value.blob
+
+        self.gcs_hook.upload(test_bucket, test_object, filename=testdata_file, cache_control=cache_control)
+
+        assert cache_control == blob_object.return_value.cache_control
+
+    @mock.patch(GCS_STRING.format("GCSHook.get_conn"))
+    def test_upload_file_gzip(self, mock_service, testdata_file):
         test_bucket = "test_bucket"
         test_object = "test_object"
 
-        self.gcs_hook.upload(test_bucket, test_object, filename=self.testfile.name, gzip=True)
-        assert not os.path.exists(self.testfile.name + ".gz")
+        self.gcs_hook.upload(test_bucket, test_object, filename=testdata_file, gzip=True)
+        assert not os.path.exists(testdata_file + ".gz")
 
     @mock.patch(GCS_STRING.format("GCSHook.get_conn"))
-    def test_upload_data_str(self, mock_service):
+    def test_upload_data_str(self, mock_service, testdata_string):
         test_bucket = "test_bucket"
         test_object = "test_object"
 
         upload_method = mock_service.return_value.bucket.return_value.blob.return_value.upload_from_string
 
-        self.gcs_hook.upload(test_bucket, test_object, data=self.testdata_str)
+        self.gcs_hook.upload(test_bucket, test_object, data=testdata_string)
 
-        upload_method.assert_called_once_with(self.testdata_str, content_type="text/plain", timeout=60)
+        upload_method.assert_called_once_with(testdata_string, content_type="text/plain", timeout=60)
 
     @mock.patch(GCS_STRING.format("GCSHook.get_conn"))
-    def test_upload_data_bytes(self, mock_service):
+    def test_upload_data_bytes(self, mock_service, testdata_bytes):
         test_bucket = "test_bucket"
         test_object = "test_object"
 
         upload_method = mock_service.return_value.bucket.return_value.blob.return_value.upload_from_string
 
-        self.gcs_hook.upload(test_bucket, test_object, data=self.testdata_bytes)
+        self.gcs_hook.upload(test_bucket, test_object, data=testdata_bytes)
 
-        upload_method.assert_called_once_with(self.testdata_bytes, content_type="text/plain", timeout=60)
+        upload_method.assert_called_once_with(testdata_bytes, content_type="text/plain", timeout=60)
 
     @mock.patch(GCS_STRING.format("BytesIO"))
     @mock.patch(GCS_STRING.format("gz.GzipFile"))
     @mock.patch(GCS_STRING.format("GCSHook.get_conn"))
-    def test_upload_data_str_gzip(self, mock_service, mock_gzip, mock_bytes_io):
+    def test_upload_data_str_gzip(self, mock_service, mock_gzip, mock_bytes_io, testdata_string):
         test_bucket = "test_bucket"
         test_object = "test_object"
         encoding = "utf-8"
@@ -853,9 +1025,9 @@ class TestGCSHookUpload(unittest.TestCase):
         data = mock_bytes_io.return_value.getvalue.return_value
         upload_method = mock_service.return_value.bucket.return_value.blob.return_value.upload_from_string
 
-        self.gcs_hook.upload(test_bucket, test_object, data=self.testdata_str, gzip=True)
+        self.gcs_hook.upload(test_bucket, test_object, data=testdata_string, gzip=True)
 
-        byte_str = bytes(self.testdata_str, encoding)
+        byte_str = bytes(testdata_string, encoding)
         mock_gzip.assert_called_once_with(fileobj=mock_bytes_io.return_value, mode="w")
         gzip_ctx.write.assert_called_once_with(byte_str)
         upload_method.assert_called_once_with(data, content_type="text/plain", timeout=60)
@@ -863,7 +1035,7 @@ class TestGCSHookUpload(unittest.TestCase):
     @mock.patch(GCS_STRING.format("BytesIO"))
     @mock.patch(GCS_STRING.format("gz.GzipFile"))
     @mock.patch(GCS_STRING.format("GCSHook.get_conn"))
-    def test_upload_data_bytes_gzip(self, mock_service, mock_gzip, mock_bytes_io):
+    def test_upload_data_bytes_gzip(self, mock_service, mock_gzip, mock_bytes_io, testdata_bytes):
         test_bucket = "test_bucket"
         test_object = "test_object"
 
@@ -871,14 +1043,14 @@ class TestGCSHookUpload(unittest.TestCase):
         data = mock_bytes_io.return_value.getvalue.return_value
         upload_method = mock_service.return_value.bucket.return_value.blob.return_value.upload_from_string
 
-        self.gcs_hook.upload(test_bucket, test_object, data=self.testdata_bytes, gzip=True)
+        self.gcs_hook.upload(test_bucket, test_object, data=testdata_bytes, gzip=True)
 
         mock_gzip.assert_called_once_with(fileobj=mock_bytes_io.return_value, mode="w")
-        gzip_ctx.write.assert_called_once_with(self.testdata_bytes)
+        gzip_ctx.write.assert_called_once_with(testdata_bytes)
         upload_method.assert_called_once_with(data, content_type="text/plain", timeout=60)
 
     @mock.patch(GCS_STRING.format("GCSHook.get_conn"))
-    def test_upload_exceptions(self, mock_service):
+    def test_upload_exceptions(self, mock_service, testdata_file, testdata_string):
         test_bucket = "test_bucket"
         test_object = "test_object"
         both_params_except = (
@@ -888,19 +1060,15 @@ class TestGCSHookUpload(unittest.TestCase):
         )
         no_params_except = "'filename' and 'data' parameter missing. One is required to upload to gcs."
 
-        with pytest.raises(ValueError) as ctx:
+        with pytest.raises(ValueError, match=re.escape(no_params_except)):
             self.gcs_hook.upload(test_bucket, test_object)
-        assert no_params_except == str(ctx.value)
 
-        with pytest.raises(ValueError) as ctx:
-            self.gcs_hook.upload(
-                test_bucket, test_object, filename=self.testfile.name, data=self.testdata_str
-            )
-        assert both_params_except == str(ctx.value)
+        with pytest.raises(ValueError, match=re.escape(both_params_except)):
+            self.gcs_hook.upload(test_bucket, test_object, filename=testdata_file, data=testdata_string)
 
 
-class TestSyncGcsHook(unittest.TestCase):
-    def setUp(self):
+class TestSyncGcsHook:
+    def setup_method(self):
         with mock.patch(
             GCS_STRING.format("GoogleBaseHook.__init__"), new=mock_base_gcp_hook_default_project_id
         ):

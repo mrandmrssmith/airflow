@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -57,20 +58,20 @@ function install_airflow() {
         pip install --root-user-action ignore --upgrade --upgrade-strategy eager \
             ${ADDITIONAL_PIP_INSTALL_FLAGS} \
             "${AIRFLOW_INSTALLATION_METHOD}[${AIRFLOW_EXTRAS}]${AIRFLOW_VERSION_SPECIFICATION}" \
-            ${EAGER_UPGRADE_ADDITIONAL_REQUIREMENTS}
+            ${EAGER_UPGRADE_ADDITIONAL_REQUIREMENTS=}
         if [[ -n "${AIRFLOW_INSTALL_EDITABLE_FLAG}" ]]; then
-            # Remove airflow and reinstall it using editable flag
+            # Remove airflow and all providers and reinstall it using editable flag
             # We can only do it when we install airflow from sources
             set -x
-            pip uninstall apache-airflow --yes
+            pip freeze | grep apache-airflow-providers | xargs pip uninstall --yes 2>/dev/null || true
+            pip uninstall apache-airflow --yes 2>/dev/null || true
             pip install --root-user-action ignore ${AIRFLOW_INSTALL_EDITABLE_FLAG} \
                 ${ADDITIONAL_PIP_INSTALL_FLAGS} \
                 "${AIRFLOW_INSTALLATION_METHOD}[${AIRFLOW_EXTRAS}]${AIRFLOW_VERSION_SPECIFICATION}"
             set +x
         fi
 
-        # make sure correct PIP version is used
-        pip install --disable-pip-version-check "pip==${AIRFLOW_PIP_VERSION}" 2>/dev/null
+        common::install_pip_version
         echo
         echo "${COLOR_BLUE}Running 'pip check'${COLOR_RESET}"
         echo
@@ -84,15 +85,13 @@ function install_airflow() {
             ${ADDITIONAL_PIP_INSTALL_FLAGS} \
             "${AIRFLOW_INSTALLATION_METHOD}[${AIRFLOW_EXTRAS}]${AIRFLOW_VERSION_SPECIFICATION}" \
             --constraint "${AIRFLOW_CONSTRAINTS_LOCATION}"
-        # make sure correct PIP version is used
-        pip install --disable-pip-version-check "pip==${AIRFLOW_PIP_VERSION}" 2>/dev/null
-        # then upgrade if needed without using constraints to account for new limits in setup.py
+        common::install_pip_version
+        # then upgrade if needed without using constraints to account for new limits in pyproject.toml
         pip install --root-user-action ignore --upgrade --upgrade-strategy only-if-needed \
             ${ADDITIONAL_PIP_INSTALL_FLAGS} \
             ${AIRFLOW_INSTALL_EDITABLE_FLAG} \
             "${AIRFLOW_INSTALLATION_METHOD}[${AIRFLOW_EXTRAS}]${AIRFLOW_VERSION_SPECIFICATION}"
-        # make sure correct PIP version is used
-        pip install --disable-pip-version-check "pip==${AIRFLOW_PIP_VERSION}" 2>/dev/null
+        common::install_pip_version
         set +x
         echo
         echo "${COLOR_BLUE}Running 'pip check'${COLOR_RESET}"

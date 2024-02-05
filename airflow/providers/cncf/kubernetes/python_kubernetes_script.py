@@ -15,13 +15,14 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""Utilities for using the kubernetes decorator"""
+"""Utilities for using the kubernetes decorator."""
 from __future__ import annotations
 
 import os
 from collections import deque
 
 import jinja2
+from jinja2 import select_autoescape
 
 
 def _balance_parens(after_decorator):
@@ -31,27 +32,35 @@ def _balance_parens(after_decorator):
     while num_paren:
         current = after_decorator.popleft()
         if current == "(":
-            num_paren = num_paren + 1
+            num_paren += 1
         elif current == ")":
-            num_paren = num_paren - 1
+            num_paren -= 1
     return "".join(after_decorator)
 
 
 def remove_task_decorator(python_source: str, task_decorator_name: str) -> str:
     """
-    Removed @kubernetes_task
+    Remove @task.kubernetes or similar as well as @setup and @teardown.
 
-    :param python_source:
+    :param python_source: python source code
+    :param task_decorator_name: the task decorator name
     """
-    if task_decorator_name not in python_source:
-        return python_source
-    split = python_source.split(task_decorator_name)
-    before_decorator, after_decorator = split[0], split[1]
-    if after_decorator[0] == "(":
-        after_decorator = _balance_parens(after_decorator)
-    if after_decorator[0] == "\n":
-        after_decorator = after_decorator[1:]
-    return before_decorator + after_decorator
+
+    def _remove_task_decorator(py_source, decorator_name):
+        if decorator_name not in py_source:
+            return python_source
+        split = python_source.split(decorator_name)
+        before_decorator, after_decorator = split[0], split[1]
+        if after_decorator[0] == "(":
+            after_decorator = _balance_parens(after_decorator)
+        if after_decorator[0] == "\n":
+            after_decorator = after_decorator[1:]
+        return before_decorator + after_decorator
+
+    decorators = ["@setup", "@teardown", task_decorator_name]
+    for decorator in decorators:
+        python_source = _remove_task_decorator(python_source, decorator)
+    return python_source
 
 
 def write_python_script(
@@ -60,7 +69,7 @@ def write_python_script(
     render_template_as_native_obj: bool = False,
 ):
     """
-    Renders the python script to a file to execute in the virtual environment.
+    Render the python script to a file to execute in the virtual environment.
 
     :param jinja_context: The jinja context variables to unpack and replace with its placeholders in the
         template file.
@@ -75,6 +84,10 @@ def write_python_script(
             loader=template_loader, undefined=jinja2.StrictUndefined
         )
     else:
-        template_env = jinja2.Environment(loader=template_loader, undefined=jinja2.StrictUndefined)
+        template_env = jinja2.Environment(
+            loader=template_loader,
+            undefined=jinja2.StrictUndefined,
+            autoescape=select_autoescape(["html", "xml"]),
+        )
     template = template_env.get_template("python_kubernetes_script.jinja2")
     template.stream(**jinja_context).dump(filename)

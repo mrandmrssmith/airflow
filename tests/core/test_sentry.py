@@ -24,6 +24,7 @@ from unittest import mock
 import pytest
 import time_machine
 from sentry_sdk import configure_scope
+from sentry_sdk.transport import Transport
 
 from airflow.operators.python import PythonOperator
 from airflow.utils import timezone
@@ -55,7 +56,7 @@ TASK_DATA = {
     "duration": None,
 }
 
-CRUMB_DATE = datetime.datetime(2019, 5, 15)
+CRUMB_DATE = datetime.datetime(2019, 5, 15, tzinfo=datetime.timezone.utc)
 CRUMB = {
     "timestamp": CRUMB_DATE,
     "type": "default",
@@ -66,6 +67,10 @@ CRUMB = {
 
 
 def before_send(_):
+    pass
+
+
+class CustomTransport(Transport):
     pass
 
 
@@ -108,6 +113,22 @@ class TestSentryHook:
         importlib.reload(sentry)
 
     @pytest.fixture
+    def sentry_custom_transport(self):
+        with conf_vars(
+            {
+                ("sentry", "sentry_on"): "True",
+                ("sentry", "default_integrations"): "False",
+                ("sentry", "transport"): "tests.core.test_sentry.CustomTransport",
+            },
+        ):
+            from airflow import sentry
+
+            importlib.reload(sentry)
+            yield sentry.Sentry
+
+        importlib.reload(sentry)
+
+    @pytest.fixture
     def sentry_minimum(self):
         """
         Minimum sentry config
@@ -120,6 +141,7 @@ class TestSentryHook:
 
         importlib.reload(sentry)
 
+    @pytest.mark.db_test
     def test_add_tagging(self, sentry, task_instance):
         """
         Test adding tags.
@@ -129,6 +151,7 @@ class TestSentryHook:
             for key, value in scope._tags.items():
                 assert TEST_SCOPE[key] == value
 
+    @pytest.mark.db_test
     @time_machine.travel(CRUMB_DATE)
     def test_add_breadcrumbs(self, sentry, task_instance):
         """
@@ -146,11 +169,20 @@ class TestSentryHook:
         Test before send callable gets passed to the sentry SDK.
         """
         assert sentry
-        called = sentry_sdk.call_args[1]["before_send"]
+        called = sentry_sdk.call_args.kwargs["before_send"]
         expected = import_string("tests.core.test_sentry.before_send")
         assert called == expected
 
-    def test_before_send_minimum_config(self, sentry_sdk, sentry_minimum):
+    def test_custom_transport(self, sentry_sdk, sentry_custom_transport):
+        """
+        Test transport gets passed to the sentry SDK
+        """
+        assert sentry_custom_transport
+        called = sentry_sdk.call_args.kwargs["transport"]
+        expected = import_string("tests.core.test_sentry.CustomTransport")
+        assert called == expected
+
+    def test_minimum_config(self, sentry_sdk, sentry_minimum):
         """
         Test before_send doesn't raise an exception when not set
         """

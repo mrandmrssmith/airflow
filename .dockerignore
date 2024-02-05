@@ -34,24 +34,20 @@
 !chart
 !docs
 !licenses
-!metastore_browser
 
 # Add those folders to the context so that they are available in the CI container
-!scripts/in_container
-!scripts/docker
+!scripts
 
 # Add tests and kubernetes_tests to context.
 !tests
 !kubernetes_tests
+!helm_tests
+!docker_tests
 
-!.coveragerc
 !.rat-excludes
-!.flake8
 !.dockerignore
-!pytest.ini
 !RELEASE_NOTES.rst
 !LICENSE
-!MANIFEST.in
 !NOTICE
 !.github
 !empty
@@ -59,8 +55,8 @@
 
 # This folder is for you if you want to add any packages to the docker context when you build your own
 # docker image. most of other files and any new folder you add will be excluded by default
-# if you need other types of files - please add the extensions here.
 !docker-context-files
+!constraints
 
 # Avoid triggering context change on README change (new companies using Airflow)
 # So please do not uncomment this line ;)
@@ -71,8 +67,7 @@
 !.bash_completion.d
 
 # Setup/version configuration
-!setup.cfg
-!setup.py
+!pyproject.toml
 !manifests
 !generated
 # Now - ignore unnecessary files inside allowed directories

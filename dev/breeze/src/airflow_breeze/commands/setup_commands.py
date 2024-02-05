@@ -22,6 +22,7 @@ import os
 import shutil
 import subprocess
 import sys
+from copy import copy
 from pathlib import Path
 from typing import Any
 
@@ -30,24 +31,25 @@ from click import Context
 from rich.console import Console
 
 from airflow_breeze import NAME, VERSION
-from airflow_breeze.commands.main_command import main
-from airflow_breeze.utils.cache import check_if_cache_exists, delete_cache, touch_cache_file
-from airflow_breeze.utils.click_utils import BreezeGroup
-from airflow_breeze.utils.common_options import (
+from airflow_breeze.commands.common_options import (
     option_answer,
     option_backend,
     option_dry_run,
-    option_mssql_version,
     option_mysql_version,
     option_postgres_version,
     option_python,
     option_verbose,
 )
+from airflow_breeze.commands.main_command import main
+from airflow_breeze.utils.cache import check_if_cache_exists, delete_cache, touch_cache_file
+from airflow_breeze.utils.click_utils import BreezeGroup
 from airflow_breeze.utils.confirm import STANDARD_TIMEOUT, Answer, user_confirm
 from airflow_breeze.utils.console import get_console, get_stderr_console
 from airflow_breeze.utils.custom_param_types import BetterChoice
+from airflow_breeze.utils.docker_command_utils import VOLUMES_FOR_SELECTED_MOUNTS
 from airflow_breeze.utils.path_utils import (
     AIRFLOW_SOURCES_ROOT,
+    SCRIPTS_CI_DOCKER_COMPOSE_LOCAL_YAML_FILE,
     get_installation_airflow_sources,
     get_installation_sources_config_metadata_hash,
     get_package_setup_metadata_hash,
@@ -188,7 +190,6 @@ def version():
 @option_backend
 @option_postgres_version
 @option_mysql_version
-@option_mssql_version
 @click.option("-C/-c", "--cheatsheet/--no-cheatsheet", help="Enable/disable cheatsheet.", default=None)
 @click.option("-A/-a", "--asciiart/--no-asciiart", help="Enable/disable ASCIIart.", default=None)
 @click.option(
@@ -201,7 +202,6 @@ def change_config(
     backend: str,
     postgres_version: str,
     mysql_version: str,
-    mssql_version: str,
     cheatsheet: bool,
     asciiart: bool,
     colour: bool,
@@ -246,7 +246,6 @@ def change_config(
     get_console().print()
     get_console().print(f"[info]* Postgres version: {postgres_version}[/]")
     get_console().print(f"[info]* MySQL version: {mysql_version}[/]")
-    get_console().print(f"[info]* MsSQL version: {mssql_version}[/]")
     get_console().print()
     get_console().print(f"[info]* ASCIIART: {get_status(asciiart_file)}[/]")
     get_console().print(f"[info]* Cheatsheet: {get_status(cheatsheet_file)}[/]")
@@ -260,29 +259,98 @@ def dict_hash(dictionary: dict[str, Any]) -> str:
     """MD5 hash of a dictionary. Sorted and dumped via json to account for random sequence)"""
     # noinspection InsecureHash
     dhash = hashlib.md5()
-    encoded = json.dumps(dictionary, sort_keys=True, default=vars).encode()
+    try:
+        encoded = json.dumps(dictionary, sort_keys=True, default=vars).encode()
+    except TypeError:
+        get_console().print(dictionary)
+        raise
     dhash.update(encoded)
     return dhash.hexdigest()
 
 
-def get_command_hash_export() -> str:
-    hashes = []
+def is_short_flag(opt):
+    return len(opt) == 2 and (not opt.startswith("--"))
+
+
+def validate_params_for_command(command_params, command):
+    options_command_map = {}
+    is_duplicate_found = False
+    if "params" in command_params:
+        for param in command_params["params"]:
+            name = param["name"]
+            for opt in param["opts"]:
+                if is_short_flag(opt):
+                    if opt not in options_command_map:
+                        options_command_map[opt] = [[command, name]]
+                    else:
+                        # same flag used in same command
+                        get_console().print(
+                            f"[error] {opt} short flag has duplicate short hand commands under command(s): "
+                            f"{'breeze ' + command} for parameters "
+                            f"{options_command_map[opt][0][1]} and {name}\n"
+                        )
+                        options_command_map[opt][0][1] = name
+                        is_duplicate_found = True
+    return is_duplicate_found
+
+
+def get_command_hash_dict() -> dict[str, str]:
+    import rich_click
+
+    hashes: dict[str, str] = {}
     with Context(main) as ctx:
         the_context_dict = ctx.to_info_dict()
         if get_verbose():
             get_stderr_console().print(the_context_dict)
-        hashes.append(f"main:{dict_hash(the_context_dict['command']['params'])}")
         commands_dict = the_context_dict["command"]["commands"]
+        options = rich_click.rich_click.OPTION_GROUPS
         for command in sorted(commands_dict.keys()):
+            duplicate_found = validate_params_for_command(commands_dict[command], command)
+            if duplicate_found:
+                sys.exit(1)
             current_command_dict = commands_dict[command]
-            if "commands" in current_command_dict:
-                subcommands = current_command_dict["commands"]
-                for subcommand in sorted(subcommands.keys()):
-                    hashes.append(f"{command}:{subcommand}:{dict_hash(subcommands[subcommand])}")
-                hashes.append(f"{command}:{dict_hash(current_command_dict)}")
+            subcommands = current_command_dict.get("commands", {})
+            if subcommands:
+                only_subcommands_with_help = copy(current_command_dict)
+                only_subcommands_with_help["commands"] = {
+                    subcommand: {
+                        "name": subcommands[subcommand]["name"],
+                        "help": subcommands[subcommand]["help"],
+                    }
+                    for subcommand in subcommands
+                    if subcommands[subcommand].get("help")
+                }
+                hashes[f"{command}"] = dict_hash(only_subcommands_with_help) + "\n"
             else:
-                hashes.append(f"{command}:{dict_hash(current_command_dict)}")
-    return "\n".join(hashes) + "\n"
+                hashes[f"{command}"] = dict_hash(current_command_dict) + "\n"
+            duplicate_found_subcommand = False
+            for subcommand in sorted(subcommands.keys()):
+                duplicate_found = validate_params_for_command(
+                    commands_dict[command]["commands"][subcommand], command + " " + subcommand
+                )
+                if duplicate_found:
+                    duplicate_found_subcommand = True
+                subcommand_click_dict = subcommands[subcommand]
+                try:
+                    subcommand_rich_click_dict = options[f"breeze {command} {subcommand}"]
+                except KeyError:
+                    get_console().print(
+                        f"[error]The `breeze {command} {subcommand}` is missing in rich-click options[/]"
+                    )
+                    get_console().print(
+                        "[info]Please add it to rich_click.OPTION_GROUPS "
+                        "via one of the `*_commands_config.py` "
+                        "files in `dev/breeze/src/airflow_breeze/commands`[/]"
+                    )
+                    sys.exit(1)
+                final_dict = {
+                    "click_commands": subcommand_click_dict,
+                    "rich_click_options": subcommand_rich_click_dict,
+                }
+                hashes[f"{command}:{subcommand}"] = dict_hash(final_dict) + "\n"
+            if duplicate_found_subcommand:
+                sys.exit(1)
+    return hashes
 
 
 def write_to_shell(command_to_execute: str, script_path: str, force_setup: bool) -> bool:
@@ -339,11 +407,9 @@ def remove_autogenerated_code(script_path: str):
     for line in lines:
         if line == START_LINE:
             pass_through = False
-            continue
-        if line.startswith(END_LINE):
+        elif line.startswith(END_LINE):
             pass_through = True
-            continue
-        if pass_through:
+        elif pass_through:
             new_lines.append(line)
     Path(script_path).write_text("".join(new_lines))
 
@@ -352,42 +418,21 @@ def backup(script_path_file: Path):
     shutil.copy(str(script_path_file), str(script_path_file) + ".bak")
 
 
-BREEZE_IMAGES_DIR = AIRFLOW_SOURCES_ROOT / "images" / "breeze"
 BREEZE_INSTALL_DIR = AIRFLOW_SOURCES_ROOT / "dev" / "breeze"
+BREEZE_DOC_DIR = BREEZE_INSTALL_DIR / "doc"
+BREEZE_IMAGES_DIR = BREEZE_DOC_DIR / "images"
 BREEZE_SOURCES_DIR = BREEZE_INSTALL_DIR / "src"
-COMMAND_HASH_FILE_PATH = BREEZE_IMAGES_DIR / "output-commands-hash.txt"
 
 
-def get_commands() -> list[str]:
-    results = []
-    if COMMAND_HASH_FILE_PATH.exists():
-        content = COMMAND_HASH_FILE_PATH.read_text()
-        for line in content.splitlines():
-            strip_line = line.strip()
-            if strip_line == "" or strip_line.startswith("#"):
-                continue
-            results.append(":".join(strip_line.split(":")[:-1]))
-    return results
+def get_old_command_hash() -> dict[str, str]:
+    command_hash = {}
+    for file in BREEZE_IMAGES_DIR.glob("output_*.txt"):
+        command = ":".join(file.name.split("_")[1:])[:-4]
+        command_hash[command] = file.read_text()
+    return command_hash
 
 
 SCREENSHOT_WIDTH = "120"
-
-PREAMBLE = """# This file is automatically generated by pre-commit. If you have a conflict with this file
-# Please do not solve it but run `breeze setup regenerate-command-images`.
-# This command should fix the conflict and regenerate help images that you have conflict with.
-"""
-
-
-def get_command_hash_dict(hash_file_content: str) -> dict[str, str]:
-    results = {}
-    for line in hash_file_content.splitlines():
-        strip_line = line.strip()
-        if strip_line.strip() == "" or strip_line.startswith("#"):
-            continue
-        command = ":".join(strip_line.split(":")[:-1])
-        the_hash = strip_line.split(":")[-1]
-        results[command] = the_hash
-    return results
 
 
 def print_difference(dict1: dict[str, str], dict2: dict[str, str]):
@@ -408,21 +453,17 @@ def regenerate_help_images_for_all_commands(commands: tuple[str, ...], check_onl
     env["RECORD_BREEZE_WIDTH"] = SCREENSHOT_WIDTH
     env["TERM"] = "xterm-256color"
     env["PYTHONPATH"] = str(BREEZE_SOURCES_DIR)
-    new_hash_text_dump = PREAMBLE + get_command_hash_export()
+    new_hash_dict = get_command_hash_dict()
     regenerate_all_commands = False
     commands_list = list(commands)
     if force:
         console.print("[info]Force regeneration all breeze command images")
-        commands_list.extend(get_command_hash_dict(new_hash_text_dump).keys())
+        commands_list.extend(new_hash_dict.keys())
         regenerate_all_commands = True
     elif commands_list:
         console.print(f"[info]Regenerating breeze command images for specified commands:{commands_list}")
     else:
-        old_hash_text_dump = ""
-        if COMMAND_HASH_FILE_PATH.exists():
-            old_hash_text_dump = COMMAND_HASH_FILE_PATH.read_text()
-        old_hash_dict = get_command_hash_dict(old_hash_text_dump)
-        new_hash_dict = get_command_hash_dict(new_hash_text_dump)
+        old_hash_dict = get_old_command_hash()
         if old_hash_dict == new_hash_dict:
             if check_only:
                 console.print(
@@ -456,21 +497,125 @@ def regenerate_help_images_for_all_commands(commands: tuple[str, ...], check_onl
             env=env,
         )
     for command in commands_list:
-        if command == "main":
-            continue
-
-        subcommands = command.split(":")
-        env["RECORD_BREEZE_TITLE"] = f"Command: {' '.join(subcommands)}"
-        env["RECORD_BREEZE_OUTPUT_FILE"] = str(BREEZE_IMAGES_DIR / f"output_{'_'.join(subcommands)}.svg")
-        env["RECORD_BREEZE_UNIQUE_ID"] = f"breeze-{'-'.join(subcommands)}"
-        run_command(
-            ["breeze", *subcommands, "--help"],
-            env=env,
-        )
+        if command != "main":
+            subcommands = command.split(":")
+            env["RECORD_BREEZE_TITLE"] = f"Command: {' '.join(subcommands)}"
+            env["RECORD_BREEZE_OUTPUT_FILE"] = str(BREEZE_IMAGES_DIR / f"output_{'_'.join(subcommands)}.svg")
+            env["RECORD_BREEZE_UNIQUE_ID"] = f"breeze-{'-'.join(subcommands)}"
+            run_command(["breeze", *subcommands, "--help"], env=env)
     if regenerate_all_commands:
-        COMMAND_HASH_FILE_PATH.write_text(new_hash_text_dump)
-        get_console().print(f"\n[info]New hash of breeze commands written in {COMMAND_HASH_FILE_PATH}\n")
+        for command, hash_txt in new_hash_dict.items():
+            (BREEZE_IMAGES_DIR / f"output_{'_'.join(command.split(':'))}.txt").write_text(hash_txt)
+        get_console().print("\n[info]New hash of breeze commands written\n")
     return 1
+
+
+COMMON_PARAM_NAMES = ["--help", "--verbose", "--dry-run", "--answer"]
+COMMAND_PATH_PREFIX = "dev/breeze/src/airflow_breeze/commands/"
+
+DEVELOPER_COMMANDS = ["start-airflow", "build-docs", "down", "exec", "shell", "compile-www-assets", "cleanup"]
+
+
+def command_path(command: str) -> str:
+    if command in DEVELOPER_COMMANDS:
+        return COMMAND_PATH_PREFIX + "developer_commands.py"
+    return COMMAND_PATH_PREFIX + command.replace("-", "_") + "_commands.py"
+
+
+def command_path_config(command: str) -> str:
+    if command in DEVELOPER_COMMANDS:
+        return COMMAND_PATH_PREFIX + "developer_commands_config.py"
+    return COMMAND_PATH_PREFIX + command.replace("-", "_") + "_commands_config.py"
+
+
+def find_options_in_options_list(option: str, option_list: list[list[str]]) -> int | None:
+    for i, options in enumerate(option_list):
+        if option in options:
+            return i
+    return None
+
+
+def errors_detected_in_params(command: str, subcommand: str | None, command_dict: dict[str, Any]) -> bool:
+    import rich_click
+
+    get_console().print(
+        f"[info]Checking if params are in groups for specified command :{command}"
+        + (f" {subcommand}." if subcommand else ".")
+    )
+    errors_detected = False
+    options = rich_click.rich_click.OPTION_GROUPS
+    rich_click_key = "breeze " + command + (f" {subcommand}" if subcommand else "")
+    if rich_click_key not in options:
+        get_console().print(
+            f"[error]The command `{rich_click_key}` not found in dictionaries "
+            f"defined in rich click configuration."
+        )
+        get_console().print(f"[warning]Please add it to the `{command_path_config(command)}`.")
+        return True
+    rich_click_param_groups = options[rich_click_key]
+    defined_param_names = [
+        param["opts"] for param in command_dict["params"] if param["param_type_name"] == "option"
+    ]
+    for group in rich_click_param_groups:
+        if "options" in group:
+            for param in group["options"]:
+                index = find_options_in_options_list(param, defined_param_names)
+                if index is not None:
+                    del defined_param_names[index]
+                else:
+                    get_console().print(
+                        f"[error]Parameter `{param}` is not defined as option in {command_path(command)} in "
+                        f"`{rich_click_key}`, but is present in the "
+                        f"`{rich_click_key}` group in `{command_path_config(command)}`."
+                    )
+                    get_console().print(
+                        "[warning]Please remove it from there or add parameter in "
+                        "the command. NOTE! This error might be printed when the option is"
+                        "added twice in the command definition!."
+                    )
+                    errors_detected = True
+    for param in COMMON_PARAM_NAMES:
+        index = find_options_in_options_list(param, defined_param_names)
+        if index is not None:
+            del defined_param_names[index]
+    if defined_param_names:
+        for param in defined_param_names:
+            get_console().print(
+                f"[error]Parameter `{param}` is defined in `{command_path(command)}` in "
+                f"`{rich_click_key}`, but does not belong to any group options "
+                f"in `{rich_click_key}` group in `{command_path_config(command)}` and is not common."
+            )
+            get_console().print("[warning]Please add it to relevant group or create new group there.")
+        errors_detected = True
+    return errors_detected
+
+
+def check_that_all_params_are_in_groups(commands: tuple[str, ...]) -> int:
+    Console(width=int(SCREENSHOT_WIDTH), color_system="standard")
+    env = os.environ.copy()
+    env["AIRFLOW_SOURCES_ROOT"] = str(AIRFLOW_SOURCES_ROOT)
+    env["RECORD_BREEZE_WIDTH"] = SCREENSHOT_WIDTH
+    env["TERM"] = "xterm-256color"
+    env["PYTHONPATH"] = str(BREEZE_SOURCES_DIR)
+    with Context(main) as ctx:
+        the_context_dict = ctx.to_info_dict()
+    commands_dict = the_context_dict["command"]["commands"]
+    if commands:
+        commands_list = list(commands)
+    else:
+        commands_list = commands_dict.keys()
+    errors_detected = False
+    for command in commands_list:
+        current_command_dict = commands_dict[command]
+        if "commands" in current_command_dict:
+            subcommands = current_command_dict["commands"]
+            for subcommand in sorted(subcommands.keys()):
+                if errors_detected_in_params(command, subcommand, subcommands[subcommand]):
+                    errors_detected = True
+        else:
+            if errors_detected_in_params(command, None, current_command_dict):
+                errors_detected = True
+    return 1 if errors_detected else 0
 
 
 @setup.command(name="regenerate-command-images", help="Regenerate breeze command images.")
@@ -487,7 +632,7 @@ def regenerate_help_images_for_all_commands(commands: tuple[str, ...], check_onl
     help="Command(s) to regenerate images for (optional, might be repeated)",
     show_default=True,
     multiple=True,
-    type=BetterChoice(get_commands()),
+    type=BetterChoice(sorted(list(get_old_command_hash().keys()))),
 )
 @option_verbose
 @option_dry_run
@@ -496,3 +641,65 @@ def regenerate_command_images(command: tuple[str, ...], force: bool, check_only:
         commands=command, check_only=check_only, force=force
     )
     sys.exit(return_code)
+
+
+@setup.command(name="check-all-params-in-groups", help="Check that all parameters are put in groups.")
+@click.option(
+    "--command",
+    help="Command(s) to regenerate images for (optional, might be repeated)",
+    show_default=True,
+    multiple=True,
+    type=BetterChoice(sorted(list(get_old_command_hash().keys()))),
+)
+@option_verbose
+@option_dry_run
+def check_all_params_in_groups(command: tuple[str, ...]):
+    return_code = check_that_all_params_are_in_groups(commands=command)
+    sys.exit(return_code)
+
+
+def _insert_documentation(file_path: Path, content: list[str], header: str, footer: str):
+    text = file_path.read_text().splitlines(keepends=True)
+    replacing = False
+    result: list[str] = []
+    for line in text:
+        if line.strip().startswith(header.strip()):
+            replacing = True
+            result.append(line)
+            result.extend(content)
+        if line.strip().startswith(footer.strip()):
+            replacing = False
+        if not replacing:
+            result.append(line)
+    src = "".join(result)
+    file_path.write_text(src)
+
+
+@setup.command(
+    name="synchronize-local-mounts",
+    help="Synchronize local mounts between python files and docker compose yamls.",
+)
+@option_verbose
+@option_dry_run
+def synchronize_local_mounts():
+    get_console().print("[info]Synchronizing local mounts between python files and docker compose yamls.[/]")
+    mounts_header = (
+        "        # START automatically generated volumes from "
+        "VOLUMES_FOR_SELECTED_MOUNTS in docker_command_utils.py"
+    )
+    mounts_footer = (
+        "        # END automatically generated volumes from "
+        "VOLUMES_FOR_SELECTED_MOUNTS in docker_command_utils.py"
+    )
+    prefix = "      "
+    volumes = []
+    for src, dest in VOLUMES_FOR_SELECTED_MOUNTS:
+        volumes.extend(
+            [
+                prefix + "- type: bind\n",
+                prefix + f"  source: ../../../{src}\n",
+                prefix + f"  target: {dest}\n",
+            ]
+        )
+    _insert_documentation(SCRIPTS_CI_DOCKER_COMPOSE_LOCAL_YAML_FILE, volumes, mounts_header, mounts_footer)
+    get_console().print("[success]Synchronized local mounts.[/]")

@@ -15,28 +15,38 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""Implements Docker operator"""
+"""Implements Docker operator."""
 from __future__ import annotations
 
 import ast
 import pickle
 import tarfile
 import warnings
+from collections.abc import Container
+from functools import cached_property
 from io import BytesIO, StringIO
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Iterable, Sequence
 
-from docker import APIClient, tls  # type: ignore[attr-defined]
-from docker.constants import DEFAULT_TIMEOUT_SECONDS  # type: ignore[attr-defined]
-from docker.errors import APIError  # type: ignore[attr-defined]
-from docker.types import DeviceRequest, LogConfig, Mount  # type: ignore[attr-defined]
+from deprecated.classic import deprecated
+from docker.constants import DEFAULT_TIMEOUT_SECONDS
+from docker.errors import APIError
+from docker.types import LogConfig, Mount, Ulimit
 from dotenv import dotenv_values
+from typing_extensions import Literal
 
-from airflow.exceptions import AirflowException
+from airflow.exceptions import AirflowProviderDeprecationWarning
 from airflow.models import BaseOperator
+from airflow.providers.docker.exceptions import (
+    DockerContainerFailedException,
+    DockerContainerFailedSkipException,
+)
 from airflow.providers.docker.hooks.docker import DockerHook
 
 if TYPE_CHECKING:
+    from docker import APIClient
+    from docker.types import DeviceRequest
+
     from airflow.utils.context import Context
 
 
@@ -50,8 +60,7 @@ def stringify(line: str | bytes):
 
 
 class DockerOperator(BaseOperator):
-    """
-    Execute a command inside a docker container.
+    """Execute a command inside a docker container.
 
     By default, a temporary directory is
     created on the host and mounted into a container to allow storing files
@@ -88,7 +97,7 @@ class DockerOperator(BaseOperator):
     :param environment: Environment variables to set in the container. (templated)
     :param private_environment: Private environment variables to set in the container.
         These are not templated, and hidden from the website.
-    :param env_file: Relative path to the .env file with environment variables to set in the container.
+    :param env_file: Relative path to the ``.env`` file with environment variables to set in the container.
         Overridden by variables in the environment parameter. (templated)
     :param force_pull: Pull the docker image on every run. Default is False.
     :param mem_limit: Maximum amount of memory the container can use.
@@ -96,19 +105,20 @@ class DockerOperator(BaseOperator):
         or a string like ``128m`` or ``1g``.
     :param host_tmp_dir: Specify the location of the temporary directory on the host which will
         be mapped to tmp_dir. If not provided defaults to using the standard system temp directory.
-    :param network_mode: Network mode for the container.
-        It can be one of the following:
-        bridge - Create new network stack for the container with default docker bridge network
-        None - No networking for this container
-        container:<name|id> - Use the network stack of another container specified via <name|id>
-        host - Use the host network stack. Incompatible with `port_bindings`
-        '<network-name>|<network-id>' - Connects the container to user created network
-        (using `docker network create` command)
+    :param network_mode: Network mode for the container. It can be one of the following:
+
+        - ``"bridge"``: Create new network stack for the container with default docker bridge network
+        - ``"none"``: No networking for this container
+        - ``"container:<name|id>"``: Use the network stack of another container specified via <name|id>
+        - ``"host"``: Use the host network stack. Incompatible with `port_bindings`
+        - ``"<network-name>|<network-id>"``: Connects the container to user created network
+          (using ``docker network create`` command)
     :param tls_ca_cert: Path to a PEM-encoded certificate authority
         to secure the docker connection.
     :param tls_client_cert: Path to the PEM-encoded certificate
         used to authenticate docker client.
     :param tls_client_key: Path to the PEM-encoded key used to authenticate docker client.
+    :param tls_verify: Set ``True`` to verify the validity of the provided certificate.
     :param tls_hostname: Hostname to match against
         the docker server certificate or False to disable the check.
     :param tls_ssl_version: Version of SSL to use when communicating with docker daemon.
@@ -129,9 +139,11 @@ class DockerOperator(BaseOperator):
     :param docker_conn_id: The :ref:`Docker connection id <howto/connection:docker>`
     :param dns: Docker custom DNS servers
     :param dns_search: Docker custom DNS search domain
-    :param auto_remove: Auto-removal of the container on daemon side when the
-        container's process exits.
-        The default is never.
+    :param auto_remove: Enable removal of the container when the container's process exits. Possible values:
+
+        - ``never``: (default) do not remove container
+        - ``success``: remove on success
+        - ``force``: always remove container
     :param shm_size: Size of ``/dev/shm`` in bytes. The size must be
         greater than 0. If omitted uses system default.
     :param tty: Allocate pseudo-TTY to the container
@@ -139,6 +151,8 @@ class DockerOperator(BaseOperator):
     :param hostname: Optional hostname for the container.
     :param privileged: Give extended privileges to this container.
     :param cap_add: Include container capabilities
+    :param extra_hosts: Additional hostnames to resolve inside the container,
+        as a mapping of hostname to IP address.
     :param retrieve_output: Should this docker image consistently attempt to pull from and output
         file before manually shutting down the image. Useful for cases where users want a pickle serialized
         output that is not posted to logs
@@ -151,7 +165,20 @@ class DockerOperator(BaseOperator):
         If rolling the logs creates excess files, the oldest file is removed.
         Only effective when max-size is also set. A positive integer. Defaults to 1.
     :param ipc_mode: Set the IPC mode for the container.
+    :param skip_on_exit_code: If task exits with this exit code, leave the task
+        in ``skipped`` state (default: None). If set to ``None``, any non-zero
+        exit code will be treated as a failure.
+    :param port_bindings: Publish a container's port(s) to the host. It is a
+        dictionary of value where the key indicates the port to open inside the container
+        and value indicates the host port that binds to the container port.
+        Incompatible with ``"host"`` in ``network_mode``.
+    :param ulimits: List of ulimit options to set for the container. Each item should
+        be a :py:class:`docker.types.Ulimit` instance.
     """
+
+    # !!! Changes in DockerOperator's arguments should be also reflected in !!!
+    #  - docs/apache-airflow-providers-docker/decorators/docker.rst
+    #  - airflow/decorators/__init__.pyi  (by a separate PR)
 
     template_fields: Sequence[str] = ("image", "command", "environment", "env_file", "container_name")
     template_fields_renderers = {"env_file": "yaml"}
@@ -180,6 +207,7 @@ class DockerOperator(BaseOperator):
         tls_ca_cert: str | None = None,
         tls_client_cert: str | None = None,
         tls_client_key: str | None = None,
+        tls_verify: bool = True,
         tls_hostname: str | bool | None = None,
         tls_ssl_version: str | None = None,
         mount_tmp_dir: bool = True,
@@ -192,7 +220,7 @@ class DockerOperator(BaseOperator):
         docker_conn_id: str | None = None,
         dns: list[str] | None = None,
         dns_search: list[str] | None = None,
-        auto_remove: str = "never",
+        auto_remove: Literal["never", "success", "force"] = "never",
         shm_size: int | None = None,
         tty: bool = False,
         hostname: str | None = None,
@@ -206,24 +234,43 @@ class DockerOperator(BaseOperator):
         log_opts_max_size: str | None = None,
         log_opts_max_file: str | None = None,
         ipc_mode: str | None = None,
+        skip_on_exit_code: int | Container[int] | None = None,
+        port_bindings: dict | None = None,
+        ulimits: list[Ulimit] | None = None,
         **kwargs,
     ) -> None:
-        super().__init__(**kwargs)
-        self.api_version = api_version
-        if type(auto_remove) == bool:
+        if skip_exit_code := kwargs.pop("skip_exit_code", None):
             warnings.warn(
-                "bool value for auto_remove is deprecated, please use 'never', 'success', or 'force' instead",
-                DeprecationWarning,
+                "`skip_exit_code` is deprecated and will be removed in the future. "
+                "Please use `skip_on_exit_code` instead.",
+                AirflowProviderDeprecationWarning,
                 stacklevel=2,
             )
-        if str(auto_remove) == "False":
-            self.auto_remove = "never"
-        elif str(auto_remove) == "True":
-            self.auto_remove = "success"
-        elif str(auto_remove) in ("never", "success", "force"):
-            self.auto_remove = auto_remove
-        else:
-            raise ValueError("unsupported auto_remove option, use 'never', 'success', or 'force' instead")
+            if skip_on_exit_code is not None and skip_exit_code != skip_on_exit_code:
+                msg = (
+                    f"Conflicting `skip_on_exit_code` provided, "
+                    f"skip_on_exit_code={skip_on_exit_code!r}, skip_exit_code={skip_exit_code!r}."
+                )
+                raise ValueError(msg)
+            skip_on_exit_code = skip_exit_code
+        if isinstance(auto_remove, bool):
+            warnings.warn(
+                "bool value for `auto_remove` is deprecated and will be removed in the future. "
+                "Please use 'never', 'success', or 'force' instead",
+                AirflowProviderDeprecationWarning,
+                stacklevel=2,
+            )
+            auto_remove = "success" if auto_remove else "never"
+
+        super().__init__(**kwargs)
+        self.api_version = api_version
+        if not auto_remove or auto_remove not in ("never", "success", "force"):
+            msg = (
+                f"Invalid `auto_remove` value {auto_remove!r}, "
+                "expected one of 'never', 'success', or 'force'."
+            )
+            raise ValueError(msg)
+        self.auto_remove = auto_remove
         self.command = command
         self.container_name = container_name
         self.cpus = cpus
@@ -241,6 +288,7 @@ class DockerOperator(BaseOperator):
         self.tls_ca_cert = tls_ca_cert
         self.tls_client_cert = tls_client_cert
         self.tls_client_key = tls_client_key
+        self.tls_verify = tls_verify
         self.tls_hostname = tls_hostname
         self.tls_ssl_version = tls_ssl_version
         self.mount_tmp_dir = mount_tmp_dir
@@ -257,9 +305,9 @@ class DockerOperator(BaseOperator):
         self.privileged = privileged
         self.cap_add = cap_add
         self.extra_hosts = extra_hosts
+        self.ulimits = ulimits or []
 
-        self.cli = None
-        self.container = None
+        self.container: dict = None  # type: ignore[assignment]
         self.retrieve_output = retrieve_output
         self.retrieve_output_path = retrieve_output_path
         self.timeout = timeout
@@ -267,31 +315,53 @@ class DockerOperator(BaseOperator):
         self.log_opts_max_size = log_opts_max_size
         self.log_opts_max_file = log_opts_max_file
         self.ipc_mode = ipc_mode
+        self.skip_on_exit_code = (
+            skip_on_exit_code
+            if isinstance(skip_on_exit_code, Container)
+            else [skip_on_exit_code]
+            if skip_on_exit_code is not None
+            else []
+        )
+        self.port_bindings = port_bindings or {}
+        if self.port_bindings and self.network_mode == "host":
+            raise ValueError("Port bindings is not supported in the host network mode")
 
-    def get_hook(self) -> DockerHook:
-        """
-        Retrieves hook for the operator.
-
-        :return: The Docker Hook
-        """
+    @cached_property
+    def hook(self) -> DockerHook:
+        """Create and return an DockerHook (cached)."""
+        tls_config = DockerHook.construct_tls_config(
+            ca_cert=self.tls_ca_cert,
+            client_cert=self.tls_client_cert,
+            client_key=self.tls_client_key,
+            verify=self.tls_verify,
+            assert_hostname=self.tls_hostname,
+            ssl_version=self.tls_ssl_version,
+        )
         return DockerHook(
             docker_conn_id=self.docker_conn_id,
             base_url=self.docker_url,
             version=self.api_version,
-            tls=self.__get_tls_config(),
+            tls=tls_config,
             timeout=self.timeout,
         )
 
+    @deprecated(reason="use `hook` property instead.", category=AirflowProviderDeprecationWarning)
+    def get_hook(self) -> DockerHook:
+        """Create and return an DockerHook (cached)."""
+        return self.hook
+
+    @property
+    def cli(self) -> APIClient:
+        return self.hook.api_client
+
     def _run_image(self) -> list[str] | str | None:
-        """Run a Docker container with the provided image"""
+        """Run a Docker container with the provided image."""
         self.log.info("Starting docker container from image %s", self.image)
-        if not self.cli:
-            raise Exception("The 'cli' should be initialized before!")
         if self.mount_tmp_dir:
             with TemporaryDirectory(prefix="airflowtmp", dir=self.host_tmp_dir) as host_tmp_dir_generated:
                 tmp_mount = Mount(self.tmp_dir, host_tmp_dir_generated, "bind")
                 try:
-                    return self._run_image_with_mounts(self.mounts + [tmp_mount], add_tmp_variable=True)
+                    return self._run_image_with_mounts([*self.mounts, tmp_mount], add_tmp_variable=True)
                 except APIError as e:
                     if host_tmp_dir_generated in str(e):
                         self.log.warning(
@@ -310,8 +380,6 @@ class DockerOperator(BaseOperator):
             self.environment["AIRFLOW_TMP_DIR"] = self.tmp_dir
         else:
             self.environment.pop("AIRFLOW_TMP_DIR", None)
-        if not self.cli:
-            raise Exception("The 'cli' should be initialized before!")
         docker_log_config = {}
         if self.log_opts_max_size is not None:
             docker_log_config["max-size"] = self.log_opts_max_size
@@ -324,6 +392,7 @@ class DockerOperator(BaseOperator):
             command=self.format_command(self.command),
             name=self.container_name,
             environment={**env_file_vars, **self.environment, **self._private_environment},
+            ports=list(self.port_bindings),
             host_config=self.cli.create_host_config(
                 auto_remove=False,
                 mounts=target_mounts,
@@ -331,7 +400,8 @@ class DockerOperator(BaseOperator):
                 shm_size=self.shm_size,
                 dns=self.dns,
                 dns_search=self.dns_search,
-                cpu_shares=int(round(self.cpus * 1024)),
+                cpu_shares=round(self.cpus * 1024),
+                port_bindings=self.port_bindings,
                 mem_limit=self.mem_limit,
                 cap_add=self.cap_add,
                 extra_hosts=self.extra_hosts,
@@ -339,6 +409,7 @@ class DockerOperator(BaseOperator):
                 device_requests=self.device_requests,
                 log_config=LogConfig(config=docker_log_config),
                 ipc_mode=self.ipc_mode,
+                ulimits=self.ulimits,
             ),
             image=self.image,
             user=self.user,
@@ -358,14 +429,17 @@ class DockerOperator(BaseOperator):
                 self.log.info("%s", log_chunk)
 
             result = self.cli.wait(self.container["Id"])
-            if result["StatusCode"] != 0:
-                joined_log_lines = "\n".join(log_lines)
-                raise AirflowException(f"Docker container failed: {repr(result)} lines {joined_log_lines}")
+            if result["StatusCode"] in self.skip_on_exit_code:
+                raise DockerContainerFailedSkipException(
+                    f"Docker container returned exit code {self.skip_on_exit_code}. Skipping.", logs=log_lines
+                )
+            elif result["StatusCode"] != 0:
+                raise DockerContainerFailedException(f"Docker container failed: {result!r}", logs=log_lines)
 
             if self.retrieve_output:
                 return self._attempt_to_retrieve_result()
             elif self.do_xcom_push:
-                if len(log_lines) == 0:
+                if not log_lines:
                     return None
                 try:
                     if self.xcom_all:
@@ -383,11 +457,10 @@ class DockerOperator(BaseOperator):
                 self.cli.remove_container(self.container["Id"], force=True)
 
     def _attempt_to_retrieve_result(self):
-        """
-        Attempts to pull the result of the function from the expected file using docker's
-        get_archive function.
-        If the file is not yet ready, returns None
-        :return:
+        """Attempt to pull the result from the expected file.
+
+        This uses Docker's ``get_archive`` function. If the file is not yet
+        ready, *None* is returned.
         """
 
         def copy_from_docker(container_id, src):
@@ -396,27 +469,22 @@ class DockerOperator(BaseOperator):
                 # 0 byte file, it can't be anything else than None
                 return None
             # no need to port to a file since we intend to deserialize
-            file_standin = BytesIO(b"".join(archived_result))
-            tar = tarfile.open(fileobj=file_standin)
-            file = tar.extractfile(stat["name"])
-            lib = getattr(self, "pickling_library", pickle)
-            return lib.loads(file.read())
+            with BytesIO(b"".join(archived_result)) as f:
+                tar = tarfile.open(fileobj=f)
+                file = tar.extractfile(stat["name"])
+                lib = getattr(self, "pickling_library", pickle)
+                return lib.load(file)
 
         try:
             return copy_from_docker(self.container["Id"], self.retrieve_output_path)
         except APIError:
             return None
 
-    def execute(self, context: Context) -> str | None:
-        self.cli = self._get_cli()
-        if not self.cli:
-            raise Exception("The 'cli' should be initialized before!")
-
+    def execute(self, context: Context) -> list[str] | str | None:
         # Pull the docker image if `force_pull` is set or image does not exist locally
-
         if self.force_pull or not self.cli.images(name=self.image):
             self.log.info("Pulling docker image %s", self.image)
-            latest_status = {}
+            latest_status: dict[str, str] = {}
             for output in self.cli.pull(self.image, stream=True, decode=True):
                 if isinstance(output, str):
                     self.log.info("%s", output)
@@ -433,58 +501,35 @@ class DockerOperator(BaseOperator):
                         latest_status[output_id] = output_status
         return self._run_image()
 
-    def _get_cli(self) -> APIClient:
-        if self.docker_conn_id:
-            return self.get_hook().get_conn()
-        else:
-            tls_config = self.__get_tls_config()
-            return APIClient(
-                base_url=self.docker_url, version=self.api_version, tls=tls_config, timeout=self.timeout
-            )
-
     @staticmethod
-    def format_command(command: str | list[str]) -> list[str] | str:
-        """
-        Retrieve command(s). if command string starts with [, it returns the command list)
+    def format_command(command: list[str] | str | None) -> list[str] | str | None:
+        """Retrieve command(s).
+
+        If command string starts with ``[``, the string is treated as a Python
+        literal and parsed into a list of commands.
 
         :param command: Docker command or entrypoint
 
         :return: the command (or commands)
         """
-        if isinstance(command, str) and command.strip().find("[") == 0:
-            return ast.literal_eval(command)
+        if isinstance(command, str) and command.strip().startswith("["):
+            command = ast.literal_eval(command)
         return command
 
     def on_kill(self) -> None:
-        if self.cli is not None:
+        if self.hook.client_created:
             self.log.info("Stopping docker container")
             if self.container is None:
                 self.log.info("Not attempting to kill container as it was not created")
                 return
             self.cli.stop(self.container["Id"])
 
-    def __get_tls_config(self) -> tls.TLSConfig | None:
-        tls_config = None
-        if self.tls_ca_cert and self.tls_client_cert and self.tls_client_key:
-            # Ignore type error on SSL version here - it is deprecated and type annotation is wrong
-            # it should be string
-            tls_config = tls.TLSConfig(
-                ca_cert=self.tls_ca_cert,
-                client_cert=(self.tls_client_cert, self.tls_client_key),
-                verify=True,
-                ssl_version=self.tls_ssl_version,
-                assert_hostname=self.tls_hostname,
-            )
-            self.docker_url = self.docker_url.replace("tcp://", "https://")
-        return tls_config
-
     @staticmethod
     def unpack_environment_variables(env_str: str) -> dict:
-        r"""
-        Parse environment variables from the string
+        r"""Parse environment variables from the string.
 
-        :param env_str: environment variables in key=value format separated by '\n'
-
+        :param env_str: environment variables in the ``{key}={value}`` format,
+            separated by a ``\n`` (newline)
         :return: dictionary containing parsed environment variables
         """
         return dotenv_values(stream=StringIO(env_str))

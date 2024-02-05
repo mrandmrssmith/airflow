@@ -16,13 +16,14 @@
 # under the License.
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
 import boto3
 
-from airflow import DAG
 from airflow.decorators import task
 from airflow.models.baseoperator import chain
+from airflow.models.dag import DAG
 from airflow.providers.amazon.aws.operators.batch import BatchCreateComputeEnvironmentOperator, BatchOperator
 from airflow.providers.amazon.aws.sensors.batch import (
     BatchComputeEnvironmentSensor,
@@ -33,9 +34,11 @@ from airflow.utils.trigger_rule import TriggerRule
 from tests.system.providers.amazon.aws.utils import (
     ENV_ID_KEY,
     SystemTestContextBuilder,
-    purge_logs,
+    prune_logs,
     split_string,
 )
+
+log = logging.getLogger(__name__)
 
 DAG_ID = "example_batch"
 
@@ -94,6 +97,15 @@ def create_job_queue(job_compute_environment_name, job_queue_name):
     )
 
 
+# Only describe the job if a previous task failed, to help diagnose
+@task(trigger_rule=TriggerRule.ONE_FAILED)
+def describe_job(job_id):
+    client = boto3.client("batch")
+    response = client.describe_jobs(jobs=[job_id])
+    log.info("Describing the job %s for debugging purposes", job_id)
+    log.info(response["jobs"])
+
+
 @task(trigger_rule=TriggerRule.ALL_DONE)
 def delete_job_definition(job_definition_name):
     client = boto3.client("batch")
@@ -139,16 +151,6 @@ def delete_job_queue(job_queue_name):
     )
 
 
-@task(trigger_rule=TriggerRule.ALL_DONE)
-def delete_logs(env_id: str) -> None:
-    generated_log_groups: list[tuple[str, str | None]] = [
-        # Format: ('log group name', 'log stream prefix')
-        ("/aws/batch/job", env_id),
-    ]
-
-    purge_logs(generated_log_groups)
-
-
 with DAG(
     dag_id=DAG_ID,
     schedule="@once",
@@ -188,6 +190,7 @@ with DAG(
         compute_environment=batch_job_compute_environment_name,
     )
     # [END howto_sensor_batch_compute_environment]
+    wait_for_compute_environment_valid.poke_interval = 1
 
     # [START howto_sensor_batch_job_queue]
     wait_for_job_queue_valid = BatchJobQueueSensor(
@@ -195,6 +198,7 @@ with DAG(
         job_queue=batch_job_queue_name,
     )
     # [END howto_sensor_batch_job_queue]
+    wait_for_job_queue_valid.poke_interval = 1
 
     # [START howto_operator_batch]
     submit_batch_job = BatchOperator(
@@ -215,21 +219,32 @@ with DAG(
         job_id=submit_batch_job.output,
     )
     # [END howto_sensor_batch]
+    wait_for_batch_job.poke_interval = 10
 
     wait_for_compute_environment_disabled = BatchComputeEnvironmentSensor(
         task_id="wait_for_compute_environment_disabled",
         compute_environment=batch_job_compute_environment_name,
+        poke_interval=1,
     )
 
     wait_for_job_queue_modified = BatchJobQueueSensor(
         task_id="wait_for_job_queue_modified",
         job_queue=batch_job_queue_name,
+        poke_interval=1,
     )
 
     wait_for_job_queue_deleted = BatchJobQueueSensor(
         task_id="wait_for_job_queue_deleted",
         job_queue=batch_job_queue_name,
         treat_non_existing_as_deleted=True,
+        poke_interval=10,
+    )
+
+    log_cleanup = prune_logs(
+        [
+            # Format: ('log group name', 'log stream prefix')
+            ("/aws/batch/job", env_id)
+        ],
     )
 
     chain(
@@ -247,6 +262,7 @@ with DAG(
         submit_batch_job,
         wait_for_batch_job,
         # TEST TEARDOWN
+        describe_job(submit_batch_job.output),
         disable_job_queue(batch_job_queue_name),
         wait_for_job_queue_modified,
         delete_job_queue(batch_job_queue_name),
@@ -255,7 +271,7 @@ with DAG(
         wait_for_compute_environment_disabled,
         delete_compute_environment(batch_job_compute_environment_name),
         delete_job_definition(batch_job_definition_name),
-        delete_logs(env_id),
+        log_cleanup,
     )
 
     from tests.system.utils.watcher import watcher

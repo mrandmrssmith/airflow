@@ -16,14 +16,18 @@
 # under the License.
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from airflow.decorators.base import TaskDecorator
+from airflow.decorators.bash import bash_task
+from airflow.decorators.branch_external_python import branch_external_python_task
 from airflow.decorators.branch_python import branch_task
+from airflow.decorators.branch_virtualenv import branch_virtualenv_task
 from airflow.decorators.external_python import external_python_task
 from airflow.decorators.python import python_task
 from airflow.decorators.python_virtualenv import virtualenv_task
 from airflow.decorators.sensor import sensor_task
+from airflow.decorators.setup_teardown import setup_task, teardown_task
 from airflow.decorators.short_circuit import short_circuit_task
 from airflow.decorators.task_group import task_group
 from airflow.models.dag import dag
@@ -40,8 +44,13 @@ __all__ = [
     "virtualenv_task",
     "external_python_task",
     "branch_task",
+    "branch_virtualenv_task",
+    "branch_external_python_task",
     "short_circuit_task",
     "sensor_task",
+    "bash_task",
+    "setup",
+    "teardown",
 ]
 
 
@@ -52,8 +61,11 @@ class TaskDecoratorCollection:
     virtualenv = staticmethod(virtualenv_task)
     external_python = staticmethod(external_python_task)
     branch = staticmethod(branch_task)
+    branch_virtualenv = staticmethod(branch_virtualenv_task)
+    branch_external_python = staticmethod(branch_external_python_task)
     short_circuit = staticmethod(short_circuit_task)
     sensor = staticmethod(sensor_task)
+    bash = staticmethod(bash_task)
 
     __call__: Any = python  # Alias '@task' to '@task.python'.
 
@@ -68,3 +80,5 @@ class TaskDecoratorCollection:
 
 
 task = TaskDecoratorCollection()
+setup: Callable = setup_task
+teardown: Callable = teardown_task
