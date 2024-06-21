@@ -34,4 +34,6 @@ spec:
   limits:
     cpu: {{ .Values.karpenter.NodePool.limits.cpu }}
     memory: {{ .Values.karpenter.NodePool.limits.memory }}
+  disruption:
+    consolidationPolicy: WhenEmpty
 {{- end }}
