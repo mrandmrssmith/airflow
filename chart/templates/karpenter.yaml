@@ -36,4 +36,5 @@ spec:
     memory: {{ .Values.karpenter.NodePool.limits.memory }}
   disruption:
     consolidationPolicy: WhenEmpty
+    consolidateAfter: 30m
 {{- end }}
